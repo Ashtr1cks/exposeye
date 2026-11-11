@@ -109,6 +109,30 @@ Monitoring alerts when a risky port opens or a new known-exploited CVE appears.
 
 ![Ports & CVEs view](docs/app-exposure.png)
 
+## Association map
+
+Scans with 5 or more live hosts get a **Map** tab: an interactive graph linking the domain to its
+subdomains, their IP addresses, the hosting networks behind them, and outside services they point
+to via CNAME. It surfaces patterns a table hides:
+
+- **Shared infrastructure:** many subdomains on one server means one compromise or CVE affects
+  them all.
+- **Outside dependencies:** CNAMEs to Heroku, Shopify, GitHub Pages and so on, with dangling ones
+  (subdomain-takeover risk) drawn as red dashed links.
+- **Where risk concentrates:** nodes are coloured by their worst issue (known-exploited CVE, risky
+  open port, takeover). Bigger nodes have more open ports, and amber rings mark sensitive-sounding
+  names.
+
+Click any node for details (ports, ranked CVEs, website, hosts sharing an IP). Hover to highlight
+a host's chain through IP to provider, and search to find a node. Large scans stay readable with
+**Group by network**, **Risky only** and an optional **Include historical**, and **Save PNG**
+exports the map for a report. The graph uses [Cytoscape.js](https://js.cytoscape.org/) (MIT),
+bundled locally so the app works offline and never loads code from the internet.
+
+![Association map (demo data)](docs/app-map.png)
+
+*Screenshot uses fictional demo data with documentation-only IP addresses.*
+
 ## Monitoring
 
 A single scan is a snapshot; monitoring tells you **what changed**. Add domains you own (and

@@ -249,7 +249,7 @@ const RISK = {
 
 /* ================================================================== state & history */
 
-const state = { stream: null, tick: null, jobs: {}, history: [], running: [] };
+const state = { stream: null, tick: null, jobs: {}, history: [], running: [], cy: null, monitorTimer: null };
 
 function closeStream() {
   if (state.stream) { state.stream.close(); state.stream = null; }
@@ -303,6 +303,7 @@ async function refreshBadge() {
 
 function route() {
   closeStream();
+  destroyMap();
   clearTimeout(state.monitorTimer);
   const [, view, id, sub] = location.hash.split("/");
   if (view === "scan" && id) showResult(id, sub);
@@ -656,6 +657,7 @@ function tabbed(kind, tabs, views) {
   const bar = h("div", { class: "tabs", role: "tablist" });
   if (!tabs.some(([k]) => k === tabState[kind])) tabState[kind] = tabs[0][0];
   function open(key, arg) {
+    destroyMap();
     tabState[kind] = key;
     // Reflect the tab in the URL (bookmarkable) without re-running the router.
     const parts = location.hash.split("/");
@@ -691,6 +693,7 @@ function showDomainResult(r, id, watchBtn) {
   const tabs = [
     ["findings", "Findings", r.findings.length],
     ["hosts", "Hosts", r.hosts.length],
+    mapEligible(r) ? ["map", "Map", null] : null,
     ["dns", "DNS", null],
     r.email ? ["email", "Email security", null] : null,
     r.exposure ? ["exposure", "Ports & CVEs", r.summary.open_ports ?? null] : null,
@@ -702,6 +705,7 @@ function showDomainResult(r, id, watchBtn) {
     findings: () => findingsView(r, sevFilter), hosts: () => hostsView(r), dns: () => dnsView(r),
     email: () => domainEmailView(r.email), web: () => webView(r), whois: () => whoisView(r),
     exposure: () => exposureView(r),
+    map: () => mapView(r),
   });
 
   const verdict = counts.high
@@ -888,6 +892,303 @@ function exposureView(r) {
       h("tbody", {}, ipRows))))
       : h("div", { class: "panel" }, h("div", { class: "empty" }, "Shodan has no data for these IPs. That usually means nothing notable is exposed.")),
     errorsNotice({ errors: Object.fromEntries(Object.entries(exp.errors || {}).map(([k, v]) => [`exposure:${k}`, v])) }));
+}
+
+/* ---- association map (Cytoscape.js, bundled locally) ---- */
+
+const MEDIUM_PORTS = new Set([21, 135, 161, 389, 5601, 5985, 5986]);
+const RISK_RANK = { none: 0, low: 1, medium: 2, high: 3 };
+const worse = (a, b) => (RISK_RANK[b] > RISK_RANK[a] ? b : a);
+const MAP_MIN_HOSTS = 5;
+const MAP_MAX_HOSTS = 300;
+
+let cytoscapeLoading = null;
+function loadCytoscape() {
+  if (window.cytoscape) return Promise.resolve(window.cytoscape);
+  cytoscapeLoading ||= new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "/static/vendor/cytoscape-3.34.4.min.js";
+    s.onload = () => resolve(window.cytoscape);
+    s.onerror = () => { cytoscapeLoading = null; reject(new Error("Couldn't load the graph library.")); };
+    document.head.append(s);
+  });
+  return cytoscapeLoading;
+}
+
+function destroyMap() {
+  if (state.cy) { state.cy.destroy(); state.cy = null; }
+}
+
+const mapEligible = (r) => r.hosts.filter((x) => x.ips.length && !x.wildcard).length >= MAP_MIN_HOSTS;
+
+function ipRisk(exp, ip) {
+  const info = exp?.ips?.[ip];
+  if (!info) return "none";
+  let risk = "none";
+  for (const p of info.ports) if (p in RISKY_PORTS) risk = worse(risk, MEDIUM_PORTS.has(p) ? "medium" : "high");
+  for (const c of info.vulns) {
+    const m = exp.cves?.[c] || {};
+    risk = worse(risk, m.kev ? "high" : m.priority || "low");
+  }
+  if (info.tags.some((t) => t.startsWith("eol"))) risk = worse(risk, "medium");
+  return risk;
+}
+
+function hostRisk(x, r, tlsBy) {
+  let risk = x.dangling ? "high" : "none";
+  for (const ip of x.ips) risk = worse(risk, ipRisk(r.exposure, ip));
+  const t = tlsBy[x.name];
+  if (t && !t.valid && t.error) risk = worse(risk, "high");
+  return risk;
+}
+
+const netName = (r, ip) => {
+  const a = r.asn?.[ip];
+  if (!a) return "Unknown network";
+  return (a.as_name || `AS${a.asn}`).split(/ - |,/)[0].trim();
+};
+
+function buildGraph(r, opt) {
+  const domain = r.meta.domain;
+  const tlsBy = Object.fromEntries((r.tls || []).map((t) => [t.host, t]));
+  const nodes = new Map();
+  const edges = [];
+  const node = (id, data) => { if (!nodes.has(id)) nodes.set(id, { data: { id, size: 20, ...data } }); return nodes.get(id).data; };
+  const short = (name) => (name === domain ? domain : name.endsWith(`.${domain}`) ? name.slice(0, -domain.length - 1) : name);
+
+  let hosts = r.hosts.filter((x) => !x.wildcard && (opt.historical || x.ips.length || x.cname));
+  hosts = hosts.map((x) => ({ x, risk: hostRisk(x, r, tlsBy) }));
+  if (opt.riskyOnly) hosts = hosts.filter((h) => RISK_RANK[h.risk] >= 2 || h.x.name === domain);
+  hosts.sort((a, b) => RISK_RANK[b.risk] - RISK_RANK[a.risk] || a.x.name.localeCompare(b.x.name));
+  const truncated = hosts.length > MAP_MAX_HOSTS;
+  hosts = hosts.slice(0, MAP_MAX_HOSTS);
+
+  const rootId = `h:${domain}`;
+  node(rootId, { label: domain, kind: "root", risk: "none", name: domain });
+  for (const { x, risk } of hosts) {
+    const id = `h:${x.name}`;
+    const d = node(id, { label: short(x.name), kind: x.name === domain ? "root" : "host", name: x.name, risk,
+      size: 18 + Math.min((x.ports || []).length, 8) * 3, historical: !x.ips.length, interesting: !!x.interesting });
+    d.risk = worse(d.risk, risk);
+    if (id !== rootId) edges.push({ data: { id: `e:${rootId}>${id}`, source: rootId, target: id, kind: "sub" } });
+    if (x.cname) {
+      const internal = x.cname === domain || x.cname.endsWith(`.${domain}`);
+      const tid = internal ? `h:${x.cname}` : `x:${x.cname}`;
+      const t = node(tid, internal
+        ? { label: short(x.cname), kind: "host", name: x.cname, risk: "none", size: 18 }
+        : { label: x.cname, kind: "external", name: x.cname, risk: "none" });
+      if (x.dangling) t.risk = "high";
+      edges.push({ data: { id: `e:${id}>${tid}`, source: id, target: tid, kind: x.dangling ? "dangling" : "cname" } });
+    }
+    for (const ip of x.ips) {
+      const net = netName(r, ip);
+      const nid = `n:${net}`;
+      node(nid, { label: net, kind: "network", name: net, risk: "none", size: 30 });
+      if (opt.compact) {
+        const eid = `e:${id}>${nid}`;
+        if (!edges.some((e) => e.data.id === eid)) edges.push({ data: { id: eid, source: id, target: nid, kind: "ip" } });
+        nodes.get(nid).data.risk = worse(nodes.get(nid).data.risk, ipRisk(r.exposure, ip));
+      } else {
+        const iid = `i:${ip}`;
+        const ipNew = !nodes.has(iid);
+        node(iid, { label: ip, kind: "ip", name: ip, network: net, risk: ipRisk(r.exposure, ip),
+          size: 12 + Math.min((r.exposure?.ips?.[ip]?.ports || []).length, 8) * 2 });
+        edges.push({ data: { id: `e:${id}>${iid}`, source: id, target: iid, kind: "ip" } });
+        if (ipNew) edges.push({ data: { id: `e:${iid}>${nid}`, source: iid, target: nid, kind: "net" } });
+        nodes.get(nid).data.risk = worse(nodes.get(nid).data.risk, ipRisk(r.exposure, ip));
+      }
+    }
+  }
+  return { elements: [...nodes.values(), ...edges], truncated, hostCount: hosts.length };
+}
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function mapStyle() {
+  const c = {
+    high: cssVar("--high"), medium: cssVar("--medium"), low: cssVar("--low"), text: cssVar("--text"),
+    muted: cssVar("--muted"), border: cssVar("--border"), panel: cssVar("--panel"), accent: cssVar("--accent"),
+    bg: cssVar("--panel-2"),
+  };
+  const riskColor = (k) => `node[risk = "${k}"]`;
+  return [
+    { selector: "node", style: {
+      label: "data(label)", "font-size": 10, color: c.text, "text-valign": "bottom", "text-margin-y": 4,
+      "text-outline-color": c.panel, "text-outline-width": 2, "background-color": c.muted,
+      width: "data(size)", height: "data(size)", "border-width": 0, "min-zoomed-font-size": 7 } },
+    { selector: 'node[kind = "root"]', style: { "background-color": c.accent, shape: "round-diamond", width: 34, height: 34, "font-size": 12, "font-weight": 700 } },
+    { selector: 'node[kind = "host"]', style: { shape: "ellipse" } },
+    { selector: 'node[kind = "ip"]', style: { shape: "round-rectangle", "font-size": 8, "background-color": c.muted, color: c.muted } },
+    { selector: 'node[kind = "external"]', style: { shape: "round-tag", width: 22, height: 22, "background-color": "#8b5cf6" } },
+    { selector: 'node[kind = "network"]', style: { shape: "round-rectangle", width: 34, height: 34, "background-color": c.bg,
+      "border-width": 2, "border-color": c.muted, "border-style": "dashed", "font-size": 11, "font-weight": 700, color: c.text } },
+    { selector: 'node[?historical]', style: { opacity: 0.45 } },
+    { selector: 'node[?interesting]', style: { "border-width": 2, "border-color": c.medium } },
+    { selector: riskColor("low"), style: { "background-color": c.low } },
+    { selector: riskColor("medium"), style: { "background-color": c.medium } },
+    { selector: riskColor("high"), style: { "background-color": c.high } },
+    { selector: 'node[kind = "network"][risk = "high"]', style: { "background-color": c.bg, "border-color": c.high } },
+    { selector: 'node[kind = "network"][risk = "medium"]', style: { "background-color": c.bg, "border-color": c.medium } },
+    { selector: "edge", style: { width: 1.2, "line-color": c.muted, "curve-style": "haystack", opacity: 0.55 } },
+    { selector: 'edge[kind = "sub"]', style: { opacity: 0.22 } },
+    { selector: 'edge[kind = "net"]', style: { "line-style": "dotted", opacity: 0.5 } },
+    { selector: 'edge[kind = "cname"]', style: { "line-style": "dashed", "line-color": "#8b5cf6", "curve-style": "bezier", width: 1.4 } },
+    { selector: 'edge[kind = "dangling"]', style: { "line-style": "dashed", "line-color": c.high, "curve-style": "bezier", width: 2 } },
+    { selector: ".faded", style: { opacity: 0.12, "text-opacity": 0 } },
+    { selector: "node:selected", style: { "border-width": 3, "border-color": c.accent } },
+    { selector: ".match", style: { "border-width": 3, "border-color": c.accent } },
+  ];
+}
+
+function mapView(r) {
+  const saved = store.get("ds.map", {});
+  const opt = { riskyOnly: !!saved.riskyOnly, historical: !!saved.historical,
+    compact: saved.compact ?? r.hosts.filter((x) => x.ips.length).length > 60 };
+  const graphBox = h("div", { class: "map-canvas", role: "img", "aria-label": "Association map of hosts, IP addresses and networks" });
+  const details = h("aside", { class: "map-details" });
+  const note = h("div", { class: "muted map-note" });
+  const search = h("input", { type: "search", class: "search", placeholder: "Find a host, IP or network…", "aria-label": "Search the map" });
+
+  const toggle = (key, label) => {
+    const box = h("input", { type: "checkbox", checked: opt[key] });
+    box.addEventListener("change", () => { opt[key] = box.checked; store.set("ds.map", opt); draw(); });
+    return h("label", { class: "toggle inline" }, box, h("span", { class: "switch" }), h("span", {}, label));
+  };
+
+  const cy0 = () => state.cy;
+  function showDetails(n) {
+    if (!n) {
+      details.replaceChildren(h("h3", {}, "Click anything on the map"),
+        h("p", { class: "muted" }, "Hover to highlight connections. Drag to rearrange, scroll to zoom."),
+        h("ul", { class: "legend" },
+          legendItem("diamond accent", "The domain"),
+          legendItem("dot", "Subdomain / host (bigger = more open ports)"),
+          legendItem("square", "IP address"),
+          legendItem("box", "Hosting network (provider), grouping its IPs"),
+          legendItem("tag", "Outside service (CNAME)"),
+          legendItem("dot high", "Serious risk: known-exploited CVE, risky port, takeover"),
+          legendItem("dot medium", "Elevated risk"),
+          legendItem("dot low", "Low risk"),
+          legendItem("dot ring", "Sensitive-sounding name (admin, dev, vpn…)"),
+          legendItem("line dangling", "Dangling CNAME (takeover risk)")));
+      return;
+    }
+    const d = n.data();
+    const kids = [h("div", { class: "map-kind" }, { root: "Domain", host: "Host", ip: "IP address", network: "Hosting network", external: "Outside service" }[d.kind]),
+      h("h3", { class: "mono" }, d.name)];
+    if (d.risk !== "none") kids.push(h("span", { class: `pill ${d.risk}` }, `${d.risk} risk`));
+    const x = r.hosts.find((hh) => hh.name === d.name);
+    const exp = r.exposure || { ips: {}, cves: {} };
+    const row = (k, v) => (v ? h("div", { class: "row" }, h("span", {}, k), v) : null);
+    if ((d.kind === "host" || d.kind === "root") && x) {
+      const p = (r.http || []).find((pp) => pp.host === x.name);
+      const ports = [...new Set(x.ports || [])];
+      const vulns = [...(x.vulns || [])].sort((a, b) => ((exp.cves[b]?.kev ? 2 : 0) + (exp.cves[b]?.epss || 0)) - ((exp.cves[a]?.kev ? 2 : 0) + (exp.cves[a]?.epss || 0)));
+      kids.push(
+        row("IPs", x.ips.length ? h("span", { class: "mono" }, x.ips.join(", ")) : h("span", { class: "muted" }, "doesn't resolve")),
+        row("Points to", x.cname ? h("span", { class: "mono" }, x.cname) : null),
+        row("Network", (x.asn || []).join(", ")),
+        row("Ports", ports.length ? ports.map(portChip) : null),
+        row("CVEs", vulns.length ? [vulns.slice(0, 6).map((c) => cveChip(c, exp.cves[c])), vulns.length > 6 ? h("span", { class: "muted" }, ` +${vulns.length - 6} more`) : null] : null),
+        row("Website", p ? (p.reachable ? [h("span", { class: `status-${String(p.status)[0]}` }, p.status), " ", p.title || ""] : "no response") : null),
+        x.dangling ? h("div", { class: "notice danger" }, "Dangling CNAME: the target no longer exists. Someone may be able to claim it and take over this subdomain.") : null,
+        x.interesting ? h("div", { class: "notice" }, "Name suggests a sensitive system (admin, dev, vpn…). Worth reviewing.") : null);
+      const url = safeUrl(p?.final_url);
+      if (url) kids.push(h("a", { class: "btn btn-sm", href: url, target: "_blank", rel: "noopener noreferrer" }, icon("external"), "Open website"));
+    } else if (d.kind === "ip") {
+      const info = exp.ips[d.name];
+      const on = n.connectedEdges().sources().filter((s) => s.id() !== n.id() && s.data("kind") !== "ip").map((s) => s.data("name"));
+      kids.push(row("Network", d.network), row("Hosts here", on.length ? h("span", { class: "mono" }, on.join(", ")) : null),
+        row("Ports", info?.ports.length ? info.ports.map(portChip) : h("span", { class: "muted" }, "none seen")),
+        row("CVEs", info?.vulns.length ? [info.vulns.slice(0, 8).map((c) => cveChip(c, exp.cves[c])), info.vulns.length > 8 ? ` +${info.vulns.length - 8} more` : null] : null),
+        row("Tags", info?.tags.length ? info.tags.map((t) => h("span", { class: "tag" }, t)) : null));
+    } else if (d.kind === "network") {
+      const ipNodes = opt.compact ? cy0().collection() : n.connectedEdges().sources();
+      const ips = ipNodes.map((c) => c.data("name"));
+      const hostNames = new Set((opt.compact ? n.connectedEdges().sources()
+        : ipNodes.connectedEdges().sources().filter((s) => s.data("kind") !== "ip")).map((s) => s.data("name")));
+      kids.push(row("IP addresses", ips.length ? String(ips.length) : null), row("Hosts", String(hostNames.size)),
+        h("p", { class: "muted" }, "Everything hosted here shares infrastructure: a problem with this provider or server can affect all of them."),
+        h("div", { class: "mono map-list" }, [...hostNames].slice(0, 30).join("\n")));
+    } else if (d.kind === "external") {
+      const from = n.connectedEdges().sources().map((s) => s.data("name"));
+      kids.push(row("Used by", h("span", { class: "mono" }, from.join(", "))),
+        h("p", { class: "muted" }, "A service outside the domain that subdomains point to (via CNAME). You depend on it, and if the account is deleted the subdomain can be taken over."),
+        d.risk === "high" ? h("div", { class: "notice danger" }, "This target no longer exists (dangling). High takeover risk.") : null);
+    }
+    details.replaceChildren(...kids.filter(Boolean));
+  }
+
+  function draw() {
+    destroyMap();
+    const g = buildGraph(r, opt);
+    note.textContent = `${plural(g.hostCount, "host")} shown${g.truncated ? ` (top ${MAP_MAX_HOSTS} by risk)` : ""}` +
+      (opt.compact ? " · grouped by network" : "") + (opt.riskyOnly ? " · risky only" : "");
+    showDetails(null);
+    loadCytoscape().then((cytoscape) => {
+      if (!graphBox.isConnected) return;
+      const cy = cytoscape({
+        container: graphBox, elements: g.elements, style: mapStyle(), wheelSensitivity: 0.25, minZoom: 0.15, maxZoom: 3,
+        layout: { name: "cose", animate: false, randomize: true, padding: 24, nodeRepulsion: () => 26000,
+          idealEdgeLength: (e) => ({ sub: 95, ip: 45, net: 55, cname: 60, dangling: 60 }[e.data("kind")] || 60),
+          edgeElasticity: (e) => (e.data("kind") === "sub" ? 40 : 120), nodeOverlap: 20, gravity: 0.2,
+          numIter: 2500, componentSpacing: 80 },
+      });
+      state.cy = cy;
+      const focus = (ele) => {
+        cy.elements().addClass("faded");
+        let hood = ele.closedNeighborhood();
+        // Follow host -> IP -> hosting network so the whole chain stays visible.
+        const ipEdges = hood.nodes('[kind = "ip"]').connectedEdges('[kind = "net"]');
+        hood = hood.union(ipEdges).union(ipEdges.targets());
+        hood.removeClass("faded");
+      };
+      cy.on("mouseover", "node", (e) => focus(e.target));
+      cy.on("mouseout", "node", () => { const sel = cy.$("node:selected"); if (sel.length) focus(sel); else cy.elements().removeClass("faded"); });
+      cy.on("tap", "node", (e) => { showDetails(e.target); focus(e.target); });
+      cy.on("tap", (e) => { if (e.target === cy) { cy.elements().removeClass("faded"); showDetails(null); } });
+      if (search.value) runSearch();
+    }).catch((ex) => graphBox.replaceChildren(h("div", { class: "empty" }, ex.message)));
+  }
+
+  function runSearch() {
+    const cy = state.cy;
+    if (!cy) return;
+    const q = search.value.trim().toLowerCase();
+    cy.elements().removeClass("match faded");
+    if (!q) return;
+    const hits = cy.nodes().filter((n) => String(n.data("name")).toLowerCase().includes(q));
+    cy.elements().addClass("faded");
+    hits.addClass("match").removeClass("faded");
+    hits.ancestors().removeClass("faded");
+    if (hits.length === 1) { cy.animate({ center: { eles: hits }, zoom: 1.4 }, { duration: 300 }); showDetails(hits[0]); }
+    else if (hits.length) cy.fit(hits, 60);
+  }
+  search.addEventListener("input", runSearch);
+
+  const savePng = () => {
+    if (!state.cy) return;
+    const blob = state.cy.png({ full: true, scale: 2, bg: cssVar("--panel"), output: "blob" });
+    const a = h("a", { href: URL.createObjectURL(blob), download: `${r.meta.domain}-map.png` });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  };
+
+  const view = h("div", { class: "map-wrap" },
+    h("div", { class: "toolbar" }, search,
+      toggle("riskyOnly", "Risky only"), toggle("compact", "Group by network"), toggle("historical", "Include historical"),
+      h("button", { class: "btn btn-sm", type: "button", title: "Fit to screen", onclick: () => state.cy?.fit(undefined, 30) }, "Fit"),
+      h("button", { class: "btn btn-sm", type: "button", onclick: savePng }, icon("download"), "Save PNG")),
+    note,
+    h("div", { class: "map-layout" }, h("div", { class: "panel map-panel" }, graphBox), details));
+  setTimeout(draw, 0); // runs after the view is in the page (and, unlike rAF, also in background tabs)
+  return view;
+}
+
+function legendItem(shape, text) {
+  return h("li", {}, h("span", { class: `lg ${shape}` }), text);
 }
 
 function tile(title, cls, status, text) {

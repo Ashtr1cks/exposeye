@@ -128,3 +128,12 @@ def test_concurrency_limit(tmp_path):
         client.post("/api/scans", json={"domain": "example.com"}).status_code for _ in range(4)
     ]
     assert codes == [202, 202, 202, 429]
+
+
+def test_bundled_graph_library_is_served(client):
+    js = client.get("/static/vendor/cytoscape-3.34.4.min.js")
+    assert js.status_code == 200 and "cytoscape" in js.text[:2000].lower()
+    assert (
+        "MIT" in client.get("/static/vendor/cytoscape.LICENSE.txt").text
+        or "Permission is hereby granted" in client.get("/static/vendor/cytoscape.LICENSE.txt").text
+    )
