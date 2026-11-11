@@ -1,6 +1,6 @@
 # domainscope
 
-[![CI](https://github.com/OWNER/domainscope/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/domainscope/actions/workflows/ci.yml)
+[![CI](https://github.com/Ashtr1cks/domainscope/actions/workflows/ci.yml/badge.svg)](https://github.com/Ashtr1cks/domainscope/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -46,7 +46,7 @@ record, dangling CNAMEs to takeover-prone providers, expiring certificates, miss
 Requires Python 3.10+.
 
 ```bash
-git clone https://github.com/OWNER/domainscope.git
+git clone https://github.com/Ashtr1cks/domainscope.git
 cd domainscope
 python -m venv .venv
 # Windows:  .venv\Scripts\activate
