@@ -73,7 +73,7 @@
 </header>
 <nav><div>
   <a href="#findings">Findings</a><a href="#whois">Registration</a><a href="#dns">DNS</a>
-  <a href="#email">Email</a><a href="#hosts">Hosts</a>
+  {% if r.email %}<a href="#email">Email</a>{% endif %}<a href="#hosts">Hosts</a>
   {% if r.http %}<a href="#http">HTTP</a>{% endif %}{% if r.tls %}<a href="#tls">TLS</a>{% endif %}
 </div></nav>
 <main>
@@ -137,6 +137,7 @@
   {% if r.dns.wildcard_ips %} · Wildcard DNS → <code>{{ r.dns.wildcard_ips|join(", ") }}</code>{% endif %}</p>
 </section>
 
+{% if r.email %}
 <section id="email">
   <h2>Email security</h2>
   <dl>
@@ -151,6 +152,7 @@
     <dt>TLS-RPT</dt><dd class="{{ 'ok' if r.email.tls_rpt else 'muted' }}">{{ "yes" if r.email.tls_rpt else "no" }}</dd>
   </dl>
 </section>
+{% endif %}
 
 <section id="hosts">
   <h2>Hosts ({{ r.hosts|length }})</h2>

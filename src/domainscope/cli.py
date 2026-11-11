@@ -49,6 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--open", action="store_true", help="open the HTML report when done")
     p.add_argument("--passive", action="store_true", help="never connect to the target's hosts")
     p.add_argument("--no-subdomains", action="store_true", help="skip CT-log subdomain discovery")
+    p.add_argument("--no-whois", action="store_true", help="skip registration (RDAP) lookup")
+    p.add_argument("--no-email", action="store_true", help="skip SPF/DMARC/MTA-STS checks")
     p.add_argument("--probe-limit", type=int, default=25, help="max hosts to HTTP/TLS probe (25)")
     p.add_argument("--max-hosts", type=int, default=1000, help="max subdomains to resolve (1000)")
     p.add_argument("--workers", type=int, default=20, help="concurrent DNS workers (20)")
@@ -76,6 +78,8 @@ def main(argv: list[str] | None = None) -> int:
 
     opts = ScanOptions(
         passive=args.passive,
+        whois=not args.no_whois,
+        email=not args.no_email,
         subdomains=not args.no_subdomains,
         probe_limit=max(0, args.probe_limit),
         max_hosts=max(1, args.max_hosts),

@@ -51,11 +51,13 @@ Not available.
 DNSSEC: **{{ "enabled" if r.dns.dnssec else "not enabled" }}**{% if r.dns.wildcard_ips %} · Wildcard DNS: {{ r.dns.wildcard_ips|join(", ") }}{% endif %}
 
 
+{% if r.email %}
 ## Email security
 
 - **SPF:** {{ r.email.spf.record if r.email.spf else "missing" }}
 - **DMARC:** {{ r.email.dmarc.record if r.email.dmarc else "missing" }}
 - **MTA-STS:** {{ "yes" if r.email.mta_sts else "no" }} · **TLS-RPT:** {{ "yes" if r.email.tls_rpt else "no" }}
+{% endif %}
 
 ## Hosts ({{ r.hosts|length }})
 

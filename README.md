@@ -4,12 +4,48 @@
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-**Passive-first domain reconnaissance (OSINT) from your terminal.** Point it at a domain and get
-registration data, DNS and email-security posture, subdomains from Certificate Transparency logs,
-hosting/ASN mapping, and (optionally) HTTP/TLS checks, all in one self-contained HTML, Markdown
-or JSON report.
+**Passive-first domain reconnaissance (OSINT): a desktop app and a CLI.** Point it at a domain
+and get registration data, DNS and email-security posture, subdomains from Certificate
+Transparency logs, hosting/ASN mapping, and (optionally) HTTP/TLS checks, with every finding
+explained in plain English. Export any scan as HTML, Markdown or JSON.
 
 No API keys, no accounts, and nothing to configure.
+
+![domainscope results view](docs/app-results.png)
+
+## The app
+
+Pick what you want to find out, type a domain, and press **Run scan**. No commands to remember.
+
+| Task | What it does |
+|---|---|
+| **Full recon** | Everything below in one go |
+| **Quiet look** | Public sources only; never contacts the domain's servers |
+| **Email spoofing check** | SPF, DMARC, MTA-STS: can someone send fake mail as this domain? |
+| **Find subdomains** | Certificate-log search, dangling-CNAME / takeover detection |
+| **Website security check** | Security headers, TLS certificate, version leaks |
+| **Who owns it?** | Registrar, dates, name servers, abuse contact |
+
+Results show a one-line verdict, severity counts, and tabs for findings, hosts, DNS, email,
+websites and registration. Each finding has a **What does this mean?** explanation. Scans are
+saved to `~/.domainscope` so your history persists, and the app shows the equivalent CLI command
+for every scan so you can script it later.
+
+<details><summary>Screenshot: new scan form</summary>
+
+![domainscope new scan form](docs/app-new-scan.png)
+</details>
+
+**Start it:**
+
+- **Windows:** double-click **`Start domainscope.cmd`**. The first run sets everything up.
+- **Any OS:** `pip install -e ".[desktop]"` then run `domainscope-app`
+
+It opens in its own window (via [pywebview](https://pywebview.flowrl.com/)), or in your browser
+if pywebview isn't installed or you pass `--browser`. The server only listens on `127.0.0.1` and
+rejects requests with any other `Host` header, which blocks DNS-rebinding attacks.
+
+## The CLI
 
 ```text
 $ domainscope example.com --open
@@ -51,7 +87,7 @@ cd domainscope
 python -m venv .venv
 # Windows:  .venv\Scripts\activate
 # Linux/macOS: source .venv/bin/activate
-pip install -e .
+pip install -e ".[desktop]"   # drop [desktop] if you only want the CLI + browser UI
 ```
 
 Or install it as a global CLI with [pipx](https://pipx.pypa.io/): `pipx install .`
@@ -71,6 +107,8 @@ python -m domainscope --help               # works without the console script to
 |---|---|---|
 | `--passive` | off | Skip HTTP/TLS probing; only public data sources and DNS are used |
 | `--no-subdomains` | off | Skip Certificate Transparency discovery |
+| `--no-whois` | off | Skip the registration (RDAP) lookup |
+| `--no-email` | off | Skip SPF/DMARC/MTA-STS checks |
 | `-f, --format` | `html,md,json` | Report formats to write |
 | `-o, --output-dir` | `reports` | Where reports go |
 | `--open` | off | Open the HTML report in your browser |
@@ -88,6 +126,10 @@ The JSON report has a stable structure (`meta`, `rdap`, `dns`, `email`, `hosts`,
 
 ```text
 src/domainscope/
+├── app.py              # desktop launcher (pywebview window or browser)
+├── web/
+│   ├── server.py       # FastAPI API: background scans, SSE progress, history
+│   └── static/         # single-page UI (vanilla JS, no build step)
 ├── cli.py              # argparse + rich terminal UI
 ├── scanner.py          # runs modules, aggregates findings
 ├── report.py           # JSON / Markdown / HTML rendering
@@ -100,7 +142,7 @@ src/domainscope/
     ├── asn.py          # Team Cymru DNS lookups
     ├── http_probe.py   # headers, fingerprinting
     └── tls_info.py     # certificate inspection (stdlib ssl)
-tests/                  # offline unit tests (no network needed)
+tests/                  # offline unit + API tests (no network needed)
 ```
 
 ## Development

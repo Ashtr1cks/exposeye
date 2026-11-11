@@ -60,6 +60,8 @@ Progress = Callable[[str, str, bool], None]
 @dataclass
 class ScanOptions:
     passive: bool = False
+    whois: bool = True
+    email: bool = True
     subdomains: bool = True
     probe_limit: int = 25
     max_hosts: int = 1000
@@ -103,16 +105,18 @@ def scan(domain: str, opts: ScanOptions | None = None, progress: Progress = _noo
     }
 
     # 1. Registration data ------------------------------------------------
-    try:
-        reg = rdap.lookup(domain, session, opts.timeout)
-        result["rdap"] = reg
-        add("whois", rdap.findings(reg))
-        created = (reg.get("created") or "?")[:10]
-        progress("WHOIS", f"{reg.get('registrar') or 'unknown registrar'}, created {created}", True)
-    except Exception as exc:  # noqa: BLE001
-        result["rdap"] = None
-        errors["whois"] = short_error(exc)
-        progress("WHOIS", f"failed ({errors['whois']})", False)
+    result["rdap"] = None
+    if opts.whois:
+        try:
+            reg = rdap.lookup(domain, session, opts.timeout)
+            result["rdap"] = reg
+            add("whois", rdap.findings(reg))
+            created = (reg.get("created") or "?")[:10]
+            registrar = reg.get("registrar") or "unknown registrar"
+            progress("WHOIS", f"{registrar}, created {created}", True)
+        except Exception as exc:  # noqa: BLE001
+            errors["whois"] = short_error(exc)
+            progress("WHOIS", f"failed ({errors['whois']})", False)
 
     # 2. DNS records --------------------------------------------------------
     dns_info = dns_records.collect_records(domain, resolver)
@@ -130,13 +134,15 @@ def scan(domain: str, opts: ScanOptions | None = None, progress: Progress = _noo
         add("dns", [("info", "Wildcard DNS in use", ", ".join(dns_info["wildcard_ips"]))])
 
     # 3. Email security -----------------------------------------------------
-    real_mx = [m for m in recs["MX"] if m.split(" ", 1)[-1].strip()]
-    email = email_security.analyze(domain, resolver, recs["TXT"], has_mx=bool(real_mx))
-    result["email"] = email
-    add("email", email_security.findings(email))
-    spf_state = f"SPF {email['spf']['all'] or '?'}all" if email["spf"] else "SPF missing"
-    dmarc_state = f"DMARC p={email['dmarc']['policy']}" if email["dmarc"] else "DMARC missing"
-    progress("Email sec", f"{spf_state}, {dmarc_state}", bool(email["spf"] and email["dmarc"]))
+    result["email"] = None
+    if opts.email:
+        real_mx = [m for m in recs["MX"] if m.split(" ", 1)[-1].strip()]
+        email = email_security.analyze(domain, resolver, recs["TXT"], has_mx=bool(real_mx))
+        result["email"] = email
+        add("email", email_security.findings(email))
+        spf_state = f"SPF {email['spf']['all'] or '?'}all" if email["spf"] else "SPF missing"
+        dmarc_state = f"DMARC p={email['dmarc']['policy']}" if email["dmarc"] else "DMARC missing"
+        progress("Email sec", f"{spf_state}, {dmarc_state}", bool(email["spf"] and email["dmarc"]))
 
     # 4. Subdomain discovery (passive, CT logs) ------------------------------
     names = {domain, f"www.{domain}"}
