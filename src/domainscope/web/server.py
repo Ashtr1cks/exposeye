@@ -4,13 +4,15 @@ Scans run in background threads; the browser follows progress over Server-Sent E
 Finished scans are stored as JSON files so history survives restarts.
 The server is meant to listen on 127.0.0.1 only and rejects other Host headers
 (protects against DNS-rebinding attacks from websites you visit).
+
+Password checks are deliberately NOT handled here: the UI hashes passwords in the
+browser and queries the k-anonymity API directly, so passwords never reach this server.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 import secrets
 import threading
@@ -26,10 +28,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from domainscope import __version__
-from domainscope.report import FORMATS, RENDERERS
+from domainscope.emailcheck import check_email as default_email_check
+from domainscope.report import FORMATS, RENDERERS, report_name
 from domainscope.scanner import ScanOptions
 from domainscope.scanner import scan as default_scan
-from domainscope.utils import normalize_domain, short_error
+from domainscope.settings import Settings, data_dir, mask
+from domainscope.utils import normalize_domain, normalize_email, short_error
 
 STATIC_DIR = Path(__file__).parent / "static"
 ID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
@@ -42,11 +46,11 @@ MEDIA_TYPES = {
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
 
 ScanFn = Callable[..., dict]
+Progress = Callable[[str, str, bool], None]
 
 
 def default_data_dir() -> Path:
-    env = os.environ.get("DOMAINSCOPE_HOME")
-    return Path(env) if env else Path.home() / ".domainscope"
+    return data_dir()
 
 
 def new_scan_id() -> str:
@@ -98,14 +102,18 @@ class Store:
             except (OSError, ValueError):
                 continue
             meta = result.get("meta", {})
+            kind = meta.get("kind", "domain")
+            summary = result.get("summary") or {}
             out.append(
                 {
                     "id": path.stem,
-                    "domain": meta.get("domain"),
+                    "kind": kind,
+                    "target": meta.get("email") if kind == "email" else meta.get("domain"),
                     "started": meta.get("started"),
                     "duration_s": meta.get("duration_s"),
                     "passive": (meta.get("options") or {}).get("passive"),
-                    "findings": (result.get("summary") or {}).get("findings", {}),
+                    "findings": summary.get("findings", {}),
+                    "breaches": summary.get("breaches"),
                 }
             )
         return out
@@ -114,7 +122,8 @@ class Store:
 @dataclass
 class Job:
     id: str
-    domain: str
+    kind: str
+    target: str
     options: dict
     started: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     status: str = "running"
@@ -122,26 +131,27 @@ class Job:
 
 
 class JobManager:
-    def __init__(self, store: Store, scan_fn: ScanFn, max_concurrent: int = MAX_CONCURRENT):
+    def __init__(self, store: Store, max_concurrent: int = MAX_CONCURRENT):
         self.store = store
-        self.scan_fn = scan_fn
         self.jobs: dict[str, Job] = {}
         self._slots = threading.BoundedSemaphore(max_concurrent)
 
-    def start(self, domain: str, opts: ScanOptions) -> Job:
+    def start(
+        self, kind: str, target: str, options: dict, runner: Callable[[Progress], dict]
+    ) -> Job:
         if not self._slots.acquire(blocking=False):
             raise RuntimeError("too many scans running")
-        job = Job(id=new_scan_id(), domain=domain, options=vars(opts).copy())
+        job = Job(id=new_scan_id(), kind=kind, target=target, options=options)
         self.jobs[job.id] = job
-        threading.Thread(target=self._run, args=(job, opts), daemon=True).start()
+        threading.Thread(target=self._run, args=(job, runner), daemon=True).start()
         return job
 
-    def _run(self, job: Job, opts: ScanOptions) -> None:
+    def _run(self, job: Job, runner: Callable[[Progress], dict]) -> None:
         def progress(step: str, message: str, ok: bool = True) -> None:
             job.events.append({"type": "progress", "step": step, "message": message, "ok": ok})
 
         try:
-            result = self.scan_fn(job.domain, opts, progress)
+            result = runner(progress)
             result.setdefault("meta", {})["id"] = job.id
             self.store.save(job.id, result)
             job.status = "done"
@@ -165,19 +175,39 @@ class ScanRequest(BaseModel):
     probe_limit: int = Field(25, ge=0, le=200)
 
 
+class EmailCheckRequest(BaseModel):
+    email: str = Field(..., max_length=320)
+
+
+class SettingsUpdate(BaseModel):
+    hibp_api_key: str | None = Field(None, max_length=200)
+
+
 def create_app(
     data_dir: Path | None = None,
     scan_fn: ScanFn = default_scan,
+    email_fn: ScanFn = default_email_check,
     allowed_hosts: Iterable[str] = LOCAL_HOSTS,
 ) -> FastAPI:
     app = FastAPI(title="domainscope", version=__version__, docs_url=None, redoc_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(allowed_hosts))
 
-    store = Store(data_dir or default_data_dir())
-    jobs = JobManager(store, scan_fn)
-    app.state.store, app.state.jobs = store, jobs
+    root = Path(data_dir or default_data_dir())
+    store = Store(root)
+    settings = Settings(root)
+    jobs = JobManager(store)
+    app.state.store, app.state.jobs, app.state.settings = store, jobs, settings
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    def start_job(kind: str, target: str, options: dict, runner) -> dict:
+        try:
+            job = jobs.start(kind, target, options, runner)
+        except RuntimeError as exc:
+            raise HTTPException(
+                429, f"{MAX_CONCURRENT} scans are already running - wait for one to finish."
+            ) from exc
+        return {"id": job.id, "kind": kind, "target": target}
 
     @app.get("/", include_in_schema=False)
     def index():
@@ -187,11 +217,32 @@ def create_app(
     def info():
         return {"version": __version__, "data_dir": str(store.root)}
 
+    @app.get("/api/settings")
+    def get_settings():
+        key = settings.hibp_key
+        return {
+            "hibp_key_set": bool(key),
+            "hibp_key_masked": mask(key),
+            "hibp_key_source": settings.hibp_key_source,
+            "data_dir": str(store.root),
+        }
+
+    @app.put("/api/settings")
+    def put_settings(update: SettingsUpdate):
+        settings.set_hibp_key(update.hibp_api_key)
+        return get_settings()
+
     @app.get("/api/scans")
     def list_scans():
         return {
             "running": [
-                {"id": j.id, "domain": j.domain, "started": j.started, "options": j.options}
+                {
+                    "id": j.id,
+                    "kind": j.kind,
+                    "target": j.target,
+                    "started": j.started,
+                    "options": j.options,
+                }
                 for j in jobs.running()
             ],
             "scans": store.list(),
@@ -210,13 +261,20 @@ def create_app(
             subdomains=req.subdomains,
             probe_limit=req.probe_limit,
         )
+        return start_job(
+            "domain", domain, vars(opts).copy(), lambda progress: scan_fn(domain, opts, progress)
+        )
+
+    @app.post("/api/email-checks", status_code=202)
+    def start_email_check(req: EmailCheckRequest):
         try:
-            job = jobs.start(domain, opts)
-        except RuntimeError as exc:
-            raise HTTPException(
-                429, f"{MAX_CONCURRENT} scans are already running - wait for one to finish."
-            ) from exc
-        return {"id": job.id, "domain": domain}
+            email = normalize_email(req.email)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        key = settings.hibp_key
+        return start_job(
+            "email", email, {"hibp": bool(key)}, lambda progress: email_fn(email, key, progress)
+        )
 
     @app.get("/api/scans/{scan_id}")
     def get_scan(scan_id: str):
@@ -243,7 +301,7 @@ def create_app(
             raise HTTPException(404, "scan not found") from exc
         headers = {}
         if download:
-            name = f"{result['meta']['domain']}_{scan_id}.{fmt}"
+            name = f"{report_name(result)}_{scan_id}.{fmt}"
             headers["Content-Disposition"] = f'attachment; filename="{name}"'
         return Response(RENDERERS[fmt](result), media_type=MEDIA_TYPES[fmt], headers=headers)
 

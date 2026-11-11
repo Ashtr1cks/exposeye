@@ -35,6 +35,7 @@ dev = ["pytest>=8.0", "ruff>=0.5", "httpx>=0.27"]
 [project.scripts]
 domainscope = "domainscope.cli:main"
 domainscope-app = "domainscope.app:main"
+domainscope-email = "domainscope.email_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/domainscope"]

@@ -1,6 +1,6 @@
 "use strict";
 
-/* ------------------------------------------------------------------ helpers */
+/* ================================================================== helpers */
 
 const SVGNS = "http://www.w3.org/2000/svg";
 const SEVS = ["high", "medium", "low", "info"];
@@ -26,11 +26,16 @@ function h(tag, props, ...kids) {
 const ICONS = {
   radar: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 12l6-6"/>',
   eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  eyeOff: '<path d="M3 3l18 18M10.6 6.1A10 10 0 0112 6c6.5 0 10 6 10 6a17 17 0 01-3.2 3.9M6.3 7.6A17 17 0 002 12s3.5 6 10 6a9.7 9.7 0 004.4-1"/><path d="M9.9 10a3 3 0 004.2 4.2"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+  shieldMail: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8 10h8v5H8zM8 10l4 3 4-3"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14 9l2 2"/>',
   tree: '<circle cx="6" cy="6" r="2"/><circle cx="18" cy="12" r="2"/><circle cx="18" cy="19" r="2"/><path d="M6 8v9a2 2 0 002 2h8M6 12h10"/>',
   lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>',
   id: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="12" r="2.5"/><path d="M14 10h4M14 14h4"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/>',
   sliders: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 01-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 010-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 014 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 010 4h-.1a1.7 1.7 0 00-1.5 1z"/>',
   play: '<path d="M7 5l12 7-12 7z"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 012-2h10"/>',
   download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
@@ -49,7 +54,6 @@ function icon(name) {
 
 function render(...nodes) {
   main.replaceChildren(...nodes);
-  main.scrollTop = 0;
   window.scrollTo(0, 0);
 }
 
@@ -64,7 +68,7 @@ function toast(msg) {
   el.textContent = msg;
   el.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2400);
 }
 
 async function copyText(text) {
@@ -77,8 +81,9 @@ async function copyText(text) {
 }
 
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
 const safeUrl = (u) => (typeof u === "string" && /^https?:\/\//i.test(u) ? u : null);
+const fmtNum = (n) => (typeof n === "number" ? n.toLocaleString() : n || "");
 
 function relTime(iso) {
   if (!iso) return "";
@@ -111,37 +116,51 @@ const api = {
   },
   get: (p) => api.req("GET", p),
   post: (p, b) => api.req("POST", p, b),
+  put: (p, b) => api.req("PUT", p, b),
   del: (p) => api.req("DELETE", p),
 };
 
-/* ------------------------------------------------------------------ tasks */
+/* ================================================================== tasks */
 
 const DEFAULT_OPTS = { whois: true, email: true, subdomains: true, passive: false, probe_limit: 25 };
 
 const TASKS = [
-  { id: "full", icon: "radar", title: "Full recon", badge: "Recommended",
-    desc: "Everything: who owns it, DNS, email security, subdomains and website checks.",
-    opts: {} },
-  { id: "quiet", icon: "eye", title: "Quiet look",
-    desc: "Public sources only. Never connects to the domain's own servers.",
-    opts: { passive: true } },
-  { id: "email", icon: "mail", title: "Email spoofing check",
+  { id: "full", kind: "domain", icon: "radar", title: "Full recon", badge: "Recommended",
+    desc: "Everything: who owns it, DNS, email security, subdomains and website checks.", opts: {} },
+  { id: "quiet", kind: "domain", icon: "eye", title: "Quiet look",
+    desc: "Public sources only. Never connects to the domain's own servers.", opts: { passive: true } },
+  { id: "emailsec", kind: "domain", icon: "mail", title: "Email spoofing check",
     desc: "Can someone send fake email as this domain? Checks SPF, DMARC and MTA-STS.",
     opts: { whois: false, subdomains: false, passive: true } },
-  { id: "subs", icon: "tree", title: "Find subdomains",
+  { id: "subs", kind: "domain", icon: "tree", title: "Find subdomains",
     desc: "Lists hostnames from public certificate logs and flags takeover risks.",
     opts: { whois: false, email: false, passive: true } },
-  { id: "web", icon: "lock", title: "Website security check",
+  { id: "web", kind: "domain", icon: "lock", title: "Website security check",
     desc: "Security headers, TLS certificate and server versions for the main site.",
     opts: { whois: false, email: false, subdomains: false, probe_limit: 2 } },
-  { id: "owner", icon: "id", title: "Who owns it?",
+  { id: "owner", kind: "domain", icon: "id", title: "Who owns it?",
     desc: "Registrar, creation and expiry dates, name servers and abuse contact.",
     opts: { email: false, subdomains: false, passive: true } },
+  { id: "exposure", kind: "email", icon: "shieldMail", title: "Email exposure check", badge: "New",
+    desc: "Which data breaches include this email, and were passwords leaked?", opts: {} },
+  { id: "password", kind: "password", icon: "key", title: "Has my password leaked?",
+    desc: "Checks a password against 900M+ leaked passwords without sending it anywhere.", opts: {} },
 ];
 
+const KIND_UI = {
+  domain: { step: "Which domain?", placeholder: "example.com", type: "text", run: "Run scan",
+    hint: "A domain or a full URL both work. Try: ", examples: ["example.com", "github.com", "monash.edu"] },
+  email: { step: "Which email address?", placeholder: "you@example.com", type: "email", run: "Check email",
+    hint: "Check your own email, or someone else's with their consent.", examples: [] },
+  password: { step: "Which password?", placeholder: "Type the password to check", type: "password", run: "Check password",
+    hint: "Your password never leaves this computer. Only the first 5 characters of its SHA-1 hash are sent (k-anonymity).", examples: [] },
+};
+
+const taskById = (id) => TASKS.find((t) => t.id === id);
 const taskOpts = (t) => ({ ...DEFAULT_OPTS, ...t.opts });
 const sameOpts = (a, b) => ["whois", "email", "subdomains", "passive"].every((k) => a[k] === b[k])
   && (a.passive || a.probe_limit === b.probe_limit);
+const matchDomainTask = (opts) => TASKS.find((t) => t.kind === "domain" && sameOpts(taskOpts(t), opts));
 
 function buildCommand(domain, o) {
   const parts = ["domainscope", domain || "<domain>"];
@@ -153,7 +172,9 @@ function buildCommand(domain, o) {
   return parts.join(" ");
 }
 
-function expectedSteps(o) {
+function expectedSteps(job) {
+  if (job.kind === "email") return 3;
+  const o = { ...DEFAULT_OPTS, ...(job.options || {}) };
   return (o.whois ? 1 : 0) + 1 + (o.email ? 1 : 0) + (o.subdomains ? 1 : 0) + 2 + (o.passive ? 1 : 2);
 }
 
@@ -189,10 +210,25 @@ const EXPLAIN = [
   [/^Wildcard DNS/, "Every subdomain resolves, even made-up ones. domainscope marks those hosts so they aren't mistaken for real systems."],
   [/^Recently registered/, "Newly registered domains are often used for phishing. Be careful if this isn't a domain you recognise."],
   [/^Domain registration expires soon/, "If the registration lapses, anyone could register the domain and take over its email and website."],
+  [/^Password exposed in readable/, "These sites stored passwords in plain text or with weak hashing, so attackers can read or quickly crack them. Anyone who reused that password elsewhere is at real risk of account takeover."],
+  [/^Password hash exposed/, "The sites stored passwords as hashes. Strong hashes are slow to crack but weak or common passwords can still be recovered. Changing them is the safe move."],
+  [/^Sensitive personal or financial data/, "Financial or identity data can be used for fraud or identity theft. Watch your accounts and consider credit monitoring."],
+  [/^Email found in/, "The address appeared in these breaches. Even without passwords, leaked details make phishing and spam more targeted."],
+  [/^Public Gravatar profile/, "Gravatar shows the same profile on every site that uses it, so anyone who knows the email can see these details and linked accounts."],
+  [/^Public Gravatar avatar/, "The avatar picture can link this email to accounts on other sites."],
+  [/^Email domain can't receive mail/, "Without MX records the domain doesn't accept email, so the address is probably invalid or retired."],
+  [/^Disposable email address/, "Throwaway inbox services are public or short-lived. Don't use them for anything important."],
 ];
 const explain = (title) => EXPLAIN.find(([re]) => re.test(title))?.[1];
 
-/* ------------------------------------------------------------------ state */
+const RISK = {
+  plaintext: ["warn", "Password readable (plain text)"],
+  easytocrack: ["warn", "Password weakly hashed"],
+  hardtocrack: ["note", "Password strongly hashed"],
+  unknown: ["note", "Password exposed"],
+};
+
+/* ================================================================== state & history */
 
 const state = { stream: null, tick: null, jobs: {}, history: [], running: [] };
 
@@ -216,53 +252,91 @@ function drawHistory() {
   const items = [];
   for (const j of state.running) {
     items.push(h("li", {}, h("a", { href: `#/progress/${j.id}`, class: j.id === current ? "active" : null },
-      h("div", { class: "h-domain" }, h("span", { class: "spinner", style: "width:12px;height:12px;border-width:2px" }), j.domain),
-      h("div", { class: "h-meta" }, "scanning…"))));
+      h("div", { class: "h-domain" }, h("span", { class: "spinner", style: "width:12px;height:12px;border-width:2px" }), j.target),
+      h("div", { class: "h-meta" }, "running…"))));
   }
   for (const s of state.history) {
     const f = s.findings || {};
     items.push(h("li", {}, h("a", { href: `#/scan/${s.id}`, class: s.id === current ? "active" : null },
-      h("div", { class: "h-domain" }, s.domain),
+      h("div", { class: "h-domain" }, s.kind === "email" ? icon("mail") : icon("globe"), h("span", { class: "h-text" }, s.target)),
       h("div", { class: "h-meta" },
         h("span", {}, relTime(s.started)),
+        s.kind === "email" && s.breaches != null ? h("span", {}, plural(s.breaches, "breach")) : null,
         f.high ? h("span", { class: "sev-dot high", title: "high" }, f.high) : null,
         f.medium ? h("span", { class: "sev-dot medium", title: "medium" }, f.medium) : null,
         s.passive ? h("span", {}, "passive") : null))));
   }
   ul.replaceChildren(...(items.length ? items : [h("li", { class: "history-empty" }, "No scans yet")]));
+  document.getElementById("settingsLink").classList.toggle("active", location.hash === "#/settings");
 }
 
-/* ------------------------------------------------------------------ routing */
+/* ================================================================== routing */
 
 function route() {
   closeStream();
   const [, view, id] = location.hash.split("/");
   if (view === "scan" && id) showResult(id);
   else if (view === "progress" && id) showProgress(id);
+  else if (view === "settings") showSettings();
   else showNew();
   drawHistory();
 }
 window.addEventListener("hashchange", route);
 
-async function startScan(domain, opts) {
-  const res = await api.post("/api/scans", { domain, ...opts });
-  state.jobs[res.id] = { domain: res.domain, options: opts };
-  state.running.unshift({ id: res.id, domain: res.domain, options: opts });
+async function startJob(path, body, kind, options) {
+  const res = await api.post(path, body);
+  const job = { id: res.id, kind, target: res.target, options };
+  state.jobs[res.id] = job;
+  state.running.unshift(job);
   location.hash = `#/progress/${res.id}`;
 }
+const startDomainScan = (domain, opts) => startJob("/api/scans", { domain, ...opts }, "domain", opts);
+const startEmailCheck = (email) => startJob("/api/email-checks", { email }, "email", {});
 
-/* ------------------------------------------------------------------ view: new scan */
+/* password check: runs entirely in the browser (k-anonymity) */
+async function pwnedCount(password) {
+  if (!window.crypto?.subtle) throw new Error("This browser can't hash passwords securely here.");
+  const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(password));
+  const hex = [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+  const prefix = hex.slice(0, 5);
+  const suffix = hex.slice(5);
+  const url = `https://api.pwnedpasswords.com/range/${prefix}`;
+  let res;
+  try { res = await fetch(url, { headers: { "Add-Padding": "true" } }); }
+  catch { res = await fetch(url); } // in case the padding header is blocked by CORS
+  if (!res.ok) throw new Error(`Password service error (${res.status})`);
+  for (const line of (await res.text()).split("\n")) {
+    const [s, c] = line.trim().split(":");
+    if (s === suffix) return parseInt(c, 10) || 0;
+  }
+  return 0;
+}
+
+/* ================================================================== view: new */
 
 function showNew() {
   let opts = { ...DEFAULT_OPTS, ...store.get("ds.opts", {}) };
-  const input = h("input", {
-    type: "text", class: "domain-input", placeholder: "example.com",
-    autocomplete: "off", spellcheck: "false", "aria-label": "Domain to scan",
-    value: store.get("ds.lastDomain", ""),
-  });
+  let taskId = store.get("ds.task", null);
+  if (!taskById(taskId)) taskId = matchDomainTask(opts)?.id || null;
+  if (taskById(taskId)?.kind === "domain" && !sameOpts(taskOpts(taskById(taskId)), opts)) taskId = matchDomainTask(opts)?.id || null;
+  const kindOf = () => taskById(taskId)?.kind || "domain";
+  const values = { domain: store.get("ds.lastDomain", ""), email: store.get("ds.lastEmail", ""), password: "" };
+  let shownKind = null;
+
+  const input = h("input", { type: "text", class: "domain-input", spellcheck: "false", autocomplete: "off", "aria-label": "Target" });
+  const reveal = h("button", { type: "button", class: "btn reveal", title: "Show password", "aria-label": "Show password",
+    onclick: () => {
+      const showing = input.type === "text";
+      input.type = showing ? "password" : "text";
+      reveal.replaceChildren(icon(showing ? "eye" : "eyeOff"));
+    } }, icon("eye"));
   const err = h("div", { class: "form-error", role: "alert" });
-  const runBtn = h("button", { type: "submit", class: "btn btn-primary btn-lg" }, icon("play"), "Run scan");
+  const runLabel = h("span", {});
+  const runBtn = h("button", { type: "submit", class: "btn btn-primary btn-lg" }, icon("play"), runLabel);
   const cmd = h("code", {});
+  const stepTitle = h("span", {});
+  const hint = h("div", { class: "hint" });
+  const pwResult = h("div", { class: "pw-result", "aria-live": "polite" });
   const tasksBox = h("div", { class: "tasks", role: "radiogroup", "aria-label": "What do you want to find out?" });
   const toggles = {};
   const probeOut = h("output", {});
@@ -270,35 +344,14 @@ function showNew() {
   const probeRow = h("div", { class: "range-row" },
     h("div", { class: "toggle-text" }, h("strong", {}, "Websites to check"), h("span", {}, "Maximum number of hosts to visit")),
     probe, probeOut);
-
-  function sync() {
-    const match = TASKS.find((t) => sameOpts(taskOpts(t), opts));
-    for (const card of tasksBox.children) {
-      const sel = match && card.dataset.id === match.id;
-      card.classList.toggle("selected", !!sel);
-      card.querySelector("input").checked = !!sel;
-    }
-    for (const [k, el] of Object.entries(toggles)) el.checked = k === "web" ? !opts.passive : opts[k];
-    probe.value = String(Math.max(1, opts.probe_limit));
-    probeOut.textContent = probe.value;
-    probeRow.hidden = opts.passive;
-    cmd.textContent = buildCommand(input.value.trim(), opts);
-    store.set("ds.opts", opts);
-  }
-
-  for (const t of TASKS) {
-    tasksBox.append(h("label", { class: "task", "data-id": t.id },
-      h("input", { type: "radio", name: "task", value: t.id, onchange: () => { opts = taskOpts(t); sync(); } }),
-      t.badge ? h("span", { class: "task-badge" }, t.badge) : null,
-      h("div", { class: "task-head" }, h("span", { class: "task-icon" }, icon(t.icon)), t.title),
-      h("div", { class: "task-desc" }, t.desc)));
-  }
+  const legal = h("div", { class: "legal" });
 
   const toggle = (key, title, desc) => {
     const box = h("input", {
       type: "checkbox",
       onchange: () => {
         if (key === "web") opts.passive = !box.checked; else opts[key] = box.checked;
+        taskId = matchDomainTask(opts)?.id || null;
         sync();
       },
     });
@@ -306,31 +359,7 @@ function showNew() {
     return h("label", { class: "toggle" }, box, h("span", { class: "switch" }),
       h("span", { class: "toggle-text" }, h("strong", {}, title), h("span", {}, desc)));
   };
-
-  probe.addEventListener("input", () => { opts.probe_limit = Number(probe.value); sync(); });
-  input.addEventListener("input", () => { err.textContent = ""; sync(); });
-
-  const form = h("form", {
-    novalidate: true,
-    onsubmit: async (e) => {
-      e.preventDefault();
-      const domain = input.value.trim();
-      if (!domain) { err.textContent = "Type a domain first, e.g. example.com"; input.focus(); return; }
-      runBtn.disabled = true;
-      err.textContent = "";
-      store.set("ds.lastDomain", domain);
-      try { await startScan(domain, { ...opts }); }
-      catch (ex) { err.textContent = ex.message; runBtn.disabled = false; }
-    },
-  },
-    h("div", { class: "step-title" }, h("span", { class: "step-num" }, "1"), "What do you want to find out?"),
-    tasksBox,
-    h("div", { class: "step-title" }, h("span", { class: "step-num" }, "2"), "Which domain?"),
-    h("div", { class: "domain-row" }, input),
-    h("div", { class: "hint" }, "A domain or a full URL both work. Try: ",
-      ["example.com", "github.com", "monash.edu"].map((d, i) => [i ? ", " : "",
-        h("button", { type: "button", onclick: () => { input.value = d; sync(); input.focus(); } }, d)])),
-    err,
+  const optionsBlock = h("div", {},
     h("div", { class: "step-title" }, h("span", { class: "step-num" }, "3"), "Fine-tune ", h("span", { class: "opt" }, "(optional)")),
     h("details", { class: "options" },
       h("summary", {}, icon("sliders"), "Choose exactly what to check"),
@@ -339,21 +368,125 @@ function showNew() {
         toggle("email", "Email security", "SPF, DMARC, MTA-STS: can the domain be spoofed?"),
         toggle("subdomains", "Find subdomains", "Search public certificate logs (crt.sh, Cert Spotter)"),
         toggle("web", "Visit websites", "Check security headers and TLS certificates. Turn off for a passive scan."),
-        probeRow)),
+        probeRow)));
+
+  for (const t of TASKS) {
+    tasksBox.append(h("label", { class: "task", "data-id": t.id },
+      h("input", { type: "radio", name: "task", value: t.id, onchange: () => {
+        taskId = t.id;
+        if (t.kind === "domain") opts = taskOpts(t);
+        sync();
+        input.focus();
+      } }),
+      t.badge ? h("span", { class: "task-badge" }, t.badge) : null,
+      h("div", { class: "task-head" }, h("span", { class: "task-icon" }, icon(t.icon)), t.title),
+      h("div", { class: "task-desc" }, t.desc)));
+  }
+
+  function sync() {
+    const kind = kindOf();
+    const ui = KIND_UI[kind];
+    if (kind !== shownKind) {
+      if (shownKind && shownKind !== "password") values[shownKind] = input.value;
+      input.value = values[kind] || "";
+      input.type = ui.type;
+      input.placeholder = ui.placeholder;
+      input.autocomplete = kind === "email" ? "email" : "off";
+      stepTitle.textContent = ui.step;
+      runLabel.textContent = ui.run;
+      hint.replaceChildren(ui.hint, ...ui.examples.map((d, i) => [i ? ", " : "",
+        h("button", { type: "button", onclick: () => { input.value = d; sync(); input.focus(); } }, d)]));
+      reveal.hidden = kind !== "password";
+      reveal.replaceChildren(icon("eye"));
+      optionsBlock.hidden = kind !== "domain";
+      pwResult.replaceChildren();
+      err.textContent = "";
+      legal.textContent = kind === "domain"
+        ? "Only scan domains you own or have permission to test. 'Quiet look' uses public data only."
+        : kind === "email" ? "Breach data comes from XposedOrNot (free) or Have I Been Pwned if you add a key in Settings."
+        : "Nothing is saved. The check uses the Pwned Passwords k-anonymity API.";
+      shownKind = kind;
+    }
+    for (const card of tasksBox.children) {
+      const sel = card.dataset.id === taskId;
+      card.classList.toggle("selected", sel);
+      card.querySelector("input").checked = sel;
+    }
+    for (const [k, el] of Object.entries(toggles)) el.checked = k === "web" ? !opts.passive : opts[k];
+    probe.value = String(Math.max(1, opts.probe_limit));
+    probeOut.textContent = probe.value;
+    probeRow.hidden = opts.passive;
+    cmd.textContent = kind === "domain" ? buildCommand(input.value.trim(), opts)
+      : kind === "email" ? `domainscope-email ${input.value.trim() || "<email>"}`
+      : "domainscope-email --password";
+    store.set("ds.opts", opts);
+    store.set("ds.task", taskId);
+  }
+
+  probe.addEventListener("input", () => { opts.probe_limit = Number(probe.value); taskId = matchDomainTask(opts)?.id || null; sync(); });
+  input.addEventListener("input", () => { err.textContent = ""; sync(); });
+
+  const form = h("form", {
+    novalidate: true,
+    onsubmit: async (e) => {
+      e.preventDefault();
+      const kind = kindOf();
+      const value = kind === "password" ? input.value : input.value.trim();
+      if (!value) { err.textContent = `Type ${kind === "domain" ? "a domain" : kind === "email" ? "an email address" : "a password"} first.`; input.focus(); return; }
+      runBtn.disabled = true;
+      err.textContent = "";
+      try {
+        if (kind === "password") {
+          pwResult.replaceChildren(h("div", { class: "muted" }, "Checking…"));
+          const count = await pwnedCount(value);
+          input.value = "";
+          pwResult.replaceChildren(passwordResult(count));
+          runBtn.disabled = false;
+          return;
+        }
+        if (kind === "email") { store.set("ds.lastEmail", value); await startEmailCheck(value); }
+        else { store.set("ds.lastDomain", value); await startDomainScan(value, { ...opts }); }
+      } catch (ex) {
+        err.textContent = ex.message;
+        pwResult.replaceChildren();
+        runBtn.disabled = false;
+      }
+    },
+  },
+    h("div", { class: "step-title" }, h("span", { class: "step-num" }, "1"), "What do you want to find out?"),
+    tasksBox,
+    h("div", { class: "step-title" }, h("span", { class: "step-num" }, "2"), stepTitle),
+    h("div", { class: "domain-row" }, input, reveal),
+    hint,
+    err,
+    pwResult,
+    optionsBlock,
     h("div", { class: "command" }, h("span", { class: "label" }, "Command"), cmd,
       h("button", { type: "button", class: "btn btn-ghost", title: "Copy command", onclick: () => copyText(cmd.textContent) }, icon("copy"), "Copy")),
-    h("div", { class: "run-row" }, runBtn,
-      h("div", { class: "legal" }, "Only scan domains you own or have permission to test. 'Quiet look' uses public data only.")));
+    h("div", { class: "run-row" }, runBtn, legal));
 
   render(h("section", {},
     h("div", { class: "hero" }, h("h1", {}, "New scan"),
-      h("p", {}, "Pick what you want to know, type a domain, and press Run. domainscope does the rest.")),
+      h("p", {}, "Pick what you want to know, fill in the blank, and press the button. domainscope does the rest.")),
     form));
   sync();
   input.focus();
 }
 
-/* ------------------------------------------------------------------ view: progress */
+function passwordResult(count) {
+  if (count > 0) {
+    return h("div", { class: "verdict bad" }, h("div", {},
+      h("strong", {}, `This password has appeared ${count.toLocaleString()} times in data breaches.`),
+      h("div", { style: "font-weight:400;margin-top:4px" },
+        "Attackers try leaked passwords first. Stop using it everywhere it's used, and switch to a unique password from a password manager.")));
+  }
+  return h("div", { class: "verdict good" }, h("div", {},
+    h("strong", {}, "Not found in any known data breach."),
+    h("div", { style: "font-weight:400;margin-top:4px" },
+      "That's a good sign, though not a guarantee of strength. Use it on one site only.")));
+}
+
+/* ================================================================== view: progress */
 
 async function showProgress(id) {
   let job = state.jobs[id] || state.running.find((j) => j.id === id);
@@ -362,19 +495,21 @@ async function showProgress(id) {
     job = state.running.find((j) => j.id === id);
     if (!job) { location.hash = `#/scan/${id}`; return; }
   }
-  const total = expectedSteps({ ...DEFAULT_OPTS, ...(job.options || {}) });
+  const total = expectedSteps(job);
   let done = 0;
 
   const bar = h("div", {});
   const timer = h("span", { class: "muted" }, "0s");
   const working = h("li", { class: "step" }, h("span", { class: "spinner" }), h("span", { class: "step-name" }, "Working"),
-    h("span", { class: "step-msg" }, "Querying public sources…"));
+    h("span", { class: "step-msg" }, job.kind === "email" ? "Searching breach databases…" : "Querying public sources…"));
   const steps = h("ol", { class: "steps" }, working);
 
   render(h("section", {}, h("div", { class: "progress-card" },
-    h("div", { class: "progress-head" }, h("h1", {}, job.domain), timer),
+    h("div", { class: "progress-head" }, h("h1", {}, job.target), timer),
     h("div", { class: "bar" }, bar),
-    h("div", { class: "muted" }, "Scanning… certificate-log searches can take up to a minute. You can start other scans meanwhile."),
+    h("div", { class: "muted" }, job.kind === "email"
+      ? "Checking breaches, the email's domain and public profiles…"
+      : "Scanning… certificate-log searches can take up to a minute. You can start other scans meanwhile."),
     steps)));
 
   const t0 = Date.now();
@@ -405,9 +540,9 @@ async function showProgress(id) {
   };
 }
 
-/* ------------------------------------------------------------------ view: result */
+/* ================================================================== view: result (shared) */
 
-let currentTab = "findings";
+const tabState = { domain: "findings", email: "breaches" };
 
 async function showResult(id) {
   render(h("div", { class: "empty" }, h("span", { class: "spinner", style: "display:inline-block" })));
@@ -417,7 +552,68 @@ async function showResult(id) {
     render(h("div", { class: "empty" }, h("h2", {}, "Scan not found"), h("p", {}, ex.message), h("a", { class: "btn", href: "#/" }, "Start a new scan")));
     return;
   }
+  if (r.meta.kind === "email") showEmailResult(r, id);
+  else showDomainResult(r, id);
+}
 
+function actionBar(id, onRescan, rescanLabel) {
+  const del = h("button", { class: "btn btn-danger", type: "button" }, icon("trash"), "Delete");
+  let armed = false;
+  del.addEventListener("click", async () => {
+    if (!armed) {
+      armed = true; del.classList.add("confirm"); del.lastChild.textContent = "Click again to delete";
+      setTimeout(() => { armed = false; del.classList.remove("confirm"); del.lastChild.textContent = "Delete"; }, 3000);
+      return;
+    }
+    await api.del(`/api/scans/${id}`);
+    toast("Deleted");
+    await loadHistory();
+    location.hash = "#/";
+  });
+  return h("div", { class: "actions" },
+    h("a", { class: "btn", href: `/api/scans/${id}/report/html`, target: "_blank", rel: "noopener" }, icon("external"), "Open report"),
+    h("a", { class: "btn", href: `/api/scans/${id}/report/html?download=true`, download: "" }, icon("download"), "HTML"),
+    h("a", { class: "btn", href: `/api/scans/${id}/report/md?download=true`, download: "" }, icon("download"), "Markdown"),
+    h("a", { class: "btn", href: `/api/scans/${id}/report/json?download=true`, download: "" }, icon("download"), "JSON"),
+    h("button", { class: "btn", type: "button", onclick: async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try { await onRescan(); } catch (ex) { toast(ex.message); btn.disabled = false; }
+    } }, icon("refresh"), rescanLabel),
+    del);
+}
+
+function tabbed(kind, tabs, views) {
+  const panel = h("div", {});
+  const bar = h("div", { class: "tabs", role: "tablist" });
+  if (!tabs.some(([k]) => k === tabState[kind])) tabState[kind] = tabs[0][0];
+  function open(key, arg) {
+    tabState[kind] = key;
+    for (const b of bar.children) b.classList.toggle("active", b.dataset.key === key);
+    panel.replaceChildren(views[key](arg));
+  }
+  for (const [key, label, n] of tabs) {
+    bar.append(h("button", { class: "tab", role: "tab", "data-key": key, onclick: () => open(key) },
+      label, n != null ? h("span", { class: "count" }, n) : null));
+  }
+  return { bar, panel, open, first: () => open(tabState[kind]) };
+}
+
+function commandBox(label, command) {
+  return h("div", { class: "command", style: "margin-top:22px" }, h("span", { class: "label" }, label),
+    h("code", {}, command),
+    h("button", { type: "button", class: "btn btn-ghost", onclick: () => copyText(command) }, icon("copy"), "Copy"));
+}
+
+function resultHeader(title, metaBits, actions) {
+  return h("div", { class: "result-head" },
+    h("div", {}, h("h1", {}, title), h("div", { class: "result-meta" }, metaBits)),
+    actions);
+}
+
+/* ================================================================== domain result */
+
+function showDomainResult(r, id) {
   const o = { ...DEFAULT_OPTS, ...(r.meta.options || {}) };
   const counts = r.summary.findings;
   const http = r.http || [];
@@ -429,35 +625,10 @@ async function showResult(id) {
     http.length ? ["web", "Websites & TLS", http.length] : null,
     r.rdap || r.errors?.whois ? ["whois", "Registration", null] : null,
   ].filter(Boolean);
-  if (!tabs.some(([k]) => k === currentTab)) currentTab = "findings";
-
-  const panel = h("div", {});
-  const tabBar = h("div", { class: "tabs", role: "tablist" });
   let sevFilter = "all";
-  function openTab(key) {
-    currentTab = key;
-    for (const b of tabBar.children) b.classList.toggle("active", b.dataset.key === key);
-    const views = { findings: () => findingsView(r, sevFilter), hosts: () => hostsView(r), dns: () => dnsView(r),
-      email: () => emailView(r), web: () => webView(r), whois: () => whoisView(r) };
-    panel.replaceChildren(views[key]());
-  }
-  for (const [key, label, n] of tabs) {
-    tabBar.append(h("button", { class: "tab", role: "tab", "data-key": key, onclick: () => openTab(key) },
-      label, n != null ? h("span", { class: "count" }, n) : null));
-  }
-
-  const del = h("button", { class: "btn btn-danger", type: "button" }, icon("trash"), "Delete");
-  let armed = false;
-  del.addEventListener("click", async () => {
-    if (!armed) {
-      armed = true; del.classList.add("confirm"); del.lastChild.textContent = "Click again to delete";
-      setTimeout(() => { armed = false; del.classList.remove("confirm"); del.lastChild.textContent = "Delete"; }, 3000);
-      return;
-    }
-    await api.del(`/api/scans/${id}`);
-    toast("Scan deleted");
-    await loadHistory();
-    location.hash = "#/";
+  const t = tabbed("domain", tabs, {
+    findings: () => findingsView(r, sevFilter), hosts: () => hostsView(r), dns: () => dnsView(r),
+    email: () => domainEmailView(r.email), web: () => webView(r), whois: () => whoisView(r),
   });
 
   const verdict = counts.high
@@ -467,37 +638,22 @@ async function showResult(id) {
       : h("div", { class: "verdict good" }, "No serious issues found. Remaining items are hardening suggestions.");
 
   const sevCard = (s) => h("button", { class: `card ${s}`, type: "button", title: `Show ${s} findings`,
-    onclick: () => { sevFilter = s; openTab("findings"); } },
+    onclick: () => { sevFilter = s; t.open("findings"); } },
     h("div", { class: "n" }, counts[s]), h("div", { class: "l" }, s));
 
   render(h("section", {},
-    h("div", { class: "result-head" },
-      h("div", {},
-        h("h1", {}, r.meta.domain),
-        h("div", { class: "result-meta" },
-          h("span", {}, new Date(r.meta.started).toLocaleString()), "·", h("span", {}, `${r.meta.duration_s}s`),
-          h("span", { class: `badge ${o.passive ? "" : "accent"}` }, o.passive ? "passive" : "active"))),
-      h("div", { class: "actions" },
-        h("a", { class: "btn", href: `/api/scans/${id}/report/html`, target: "_blank", rel: "noopener" }, icon("external"), "Open report"),
-        h("a", { class: "btn", href: `/api/scans/${id}/report/html?download=true`, download: "" }, icon("download"), "HTML"),
-        h("a", { class: "btn", href: `/api/scans/${id}/report/md?download=true`, download: "" }, icon("download"), "Markdown"),
-        h("a", { class: "btn", href: `/api/scans/${id}/report/json?download=true`, download: "" }, icon("download"), "JSON"),
-        h("button", { class: "btn", type: "button", onclick: async (e) => {
-          const btn = e.currentTarget;
-          btn.disabled = true;
-          try { await startScan(r.meta.domain, o); } catch (ex) { toast(ex.message); btn.disabled = false; }
-        } }, icon("refresh"), "Scan again"),
-        del)),
+    resultHeader(r.meta.domain, [
+      h("span", {}, new Date(r.meta.started).toLocaleString()), "·", h("span", {}, `${r.meta.duration_s}s`),
+      h("span", { class: `badge ${o.passive ? "" : "accent"}` }, o.passive ? "passive" : "active")],
+    actionBar(id, () => startDomainScan(r.meta.domain, o), "Scan again")),
     verdict,
     h("div", { class: "cards" }, SEVS.map(sevCard),
       h("div", { class: "card" }, h("div", { class: "n" }, r.summary.hosts_live, h("span", { class: "sub" }, ` / ${r.summary.hosts_total}`)), h("div", { class: "l" }, "hosts live")),
       h("div", { class: "card" }, h("div", { class: "n" }, r.summary.unique_ips), h("div", { class: "l" }, "unique IPs")),
       h("div", { class: "card" }, h("div", { class: "n" }, r.summary.networks), h("div", { class: "l" }, "networks"))),
-    tabBar, panel,
-    h("div", { class: "command", style: "margin-top:22px" }, h("span", { class: "label" }, "Same scan in terminal"),
-      h("code", {}, buildCommand(r.meta.domain, o)),
-      h("button", { type: "button", class: "btn btn-ghost", onclick: () => copyText(buildCommand(r.meta.domain, o)) }, icon("copy"), "Copy"))));
-  openTab(currentTab);
+    t.bar, t.panel,
+    commandBox("Same scan in terminal", buildCommand(r.meta.domain, o))));
+  t.first();
 }
 
 function findingsView(r, initial) {
@@ -520,13 +676,13 @@ function findingsView(r, initial) {
   }
   search.addEventListener("input", () => { q = search.value.toLowerCase(); draw(); });
   draw();
+  return h("div", {}, h("div", { class: "toolbar" }, chips, search), list, errorsNotice(r));
+}
 
+function errorsNotice(r) {
   const errs = Object.entries(r.errors || {});
-  return h("div", {},
-    h("div", { class: "toolbar" }, chips, search),
-    list,
-    errs.length ? h("div", { class: "notice" }, h("strong", {}, "Some sources didn't respond: "),
-      errs.map(([m, e], i) => [i ? "; " : "", `${m} (${e})`]), ". Results may be incomplete; try scanning again later.") : null);
+  return errs.length ? h("div", { class: "notice" }, h("strong", {}, "Some sources didn't respond: "),
+    errs.map(([m, e], i) => [i ? "; " : "", `${m} (${e})`]), ". Results may be incomplete; try again later.") : null;
 }
 
 function findingCard(f) {
@@ -576,14 +732,21 @@ function hostsView(r) {
   const src = r.subdomain_sources;
   return h("div", { class: "panel" },
     h("div", { class: "toolbar" }, search,
-      h("label", { class: "toggle", style: "border:none;padding:0;align-items:center" }, live, h("span", { class: "switch" }), h("span", {}, "Live hosts only")),
+      h("label", { class: "toggle inline" }, live, h("span", { class: "switch" }), h("span", {}, "Live hosts only")),
       counter),
     src ? h("p", { class: "muted", style: "margin:0 0 10px" }, "Sources: ",
       Object.entries(src.counts).map(([s, n]) => h("span", { class: "tag good" }, `${s}: ${n}`)),
       Object.keys(src.errors).map((s) => h("span", { class: "tag warn", title: src.errors[s] }, `${s}: failed`))) : null,
     h("div", { class: "table-wrap" }, h("table", {},
-      h("thead", {}, h("tr", {}, ["Host", "IP addresses", "Points to", "Network", "Website", "Notes"].map((t) => h("th", {}, t)))),
+      h("thead", {}, h("tr", {}, ["Host", "IP addresses", "Points to", "Network", "Website", "Notes"].map((x) => h("th", {}, x)))),
       body)));
+}
+
+function tile(title, cls, status, text) {
+  const tagCls = { good: "good", warn: "note", bad: "warn", neutral: "" }[cls];
+  return h("div", { class: `tile ${cls}` },
+    h("div", { class: "tile-head" }, title, h("span", { class: `tag ${tagCls}` }, status)),
+    h("p", {}, text));
 }
 
 function dnsView(r) {
@@ -599,44 +762,40 @@ function dnsView(r) {
     h("div", { class: "panel" }, h("h3", {}, "Records"),
       recs.length ? h("div", { class: "table-wrap" }, h("table", {},
         h("thead", {}, h("tr", {}, h("th", { style: "width:90px" }, "Type"), h("th", {}, "Value"))),
-        h("tbody", {}, recs.map(([t, vals]) => h("tr", {}, h("td", {}, h("strong", {}, t)),
+        h("tbody", {}, recs.map(([rt, vals]) => h("tr", {}, h("td", {}, h("strong", {}, rt)),
           h("td", {}, vals.map((v) => h("div", {}, h("code", {}, v))))))))) : h("p", { class: "muted" }, "No records found.")));
 }
 
-function tile(title, cls, status, text) {
-  const tagCls = { good: "good", warn: "note", bad: "warn" }[cls];
-  return h("div", { class: `tile ${cls}` },
-    h("div", { class: "tile-head" }, title, h("span", { class: `tag ${tagCls}` }, status)),
-    h("p", {}, text));
-}
-
-function emailView(r) {
-  const e = r.email;
-  const spf = e.spf;
-  const dmarc = e.dmarc;
-  const spfTile = !spf ? tile("SPF", "bad", "Missing", "No list of allowed mail senders.")
+function spfTile(spf) {
+  return !spf ? tile("SPF", "bad", "Missing", "No list of allowed mail senders.")
     : spf.all === "-" ? tile("SPF", "good", "Strict (-all)", "Unlisted senders are rejected.")
     : spf.all === "~" ? tile("SPF", "warn", "Soft (~all)", "Unlisted senders are flagged, not rejected.")
     : spf.all === "+" ? tile("SPF", "bad", "Open (+all)", "Anyone may send as this domain!")
     : tile("SPF", "warn", spf.all ? `${spf.all}all` : "No 'all'", "Unlisted senders are not rejected.");
-  const dmarcTile = !dmarc ? tile("DMARC", "bad", "Missing", "Spoofed mail isn't blocked or reported.")
+}
+
+function dmarcTile(dmarc) {
+  return !dmarc ? tile("DMARC", "bad", "Missing", "Spoofed mail isn't blocked or reported.")
     : dmarc.policy === "reject" ? tile("DMARC", "good", "Reject", "Spoofed mail is rejected.")
     : dmarc.policy === "quarantine" ? tile("DMARC", "good", "Quarantine", "Spoofed mail goes to spam.")
     : tile("DMARC", "warn", `p=${dmarc.policy || "?"}`, "Monitoring only: spoofed mail is still delivered.");
+}
+
+function domainEmailView(e) {
   return h("div", {},
-    h("div", { class: "tiles" }, spfTile, dmarcTile,
+    h("div", { class: "tiles" }, spfTile(e.spf), dmarcTile(e.dmarc),
       tile("MTA-STS", e.mta_sts ? "good" : "warn", e.mta_sts ? "Enabled" : "Off", "Forces encrypted mail delivery."),
       tile("TLS-RPT", e.tls_rpt ? "good" : "warn", e.tls_rpt ? "Enabled" : "Off", "Reports mail-delivery TLS failures.")),
     h("div", { class: "panel" }, h("h3", {}, "Raw records"),
       h("dl", { class: "kv" },
         h("dt", {}, "Receives mail (MX)"), h("dd", {}, e.has_mx ? "Yes" : "No"),
-        h("dt", {}, "SPF"), h("dd", {}, spf ? h("code", {}, spf.record) : "—"),
-        spf ? [h("dt", {}, "SPF lookups"), h("dd", {}, `${spf.lookup_count} of 10 allowed (top level)`)] : null,
-        h("dt", {}, "DMARC"), h("dd", {}, dmarc ? h("code", {}, dmarc.record) : "—"))));
+        h("dt", {}, "SPF"), h("dd", {}, e.spf ? h("code", {}, e.spf.record) : "—"),
+        e.spf ? [h("dt", {}, "SPF lookups"), h("dd", {}, `${e.spf.lookup_count} of 10 allowed (top level)`)] : null,
+        h("dt", {}, "DMARC"), h("dd", {}, e.dmarc ? h("code", {}, e.dmarc.record) : "—"))));
 }
 
 function webView(r) {
-  const tlsBy = Object.fromEntries((r.tls || []).map((t) => [t.host, t]));
+  const tlsBy = Object.fromEntries((r.tls || []).map((x) => [x.host, x]));
   return h("div", { class: "web-grid" }, (r.http || []).map((p) => {
     const t = tlsBy[p.host];
     if (!p.reachable) {
@@ -680,7 +839,200 @@ function whoisView(r) {
     row("Abuse contact", d.abuse_email)));
 }
 
-/* ------------------------------------------------------------------ boot */
+/* ================================================================== email result */
+
+function showEmailResult(r, id) {
+  const s = r.summary;
+  const items = r.breaches.items;
+  const tabs = [
+    ["breaches", "Breaches", items.length],
+    ["advice", "What to do", r.advice.length],
+    ["findings", "Findings", r.findings.length],
+    ["domain", "Email domain", null],
+    ["profile", "Public profile", null],
+  ];
+  const t = tabbed("email", tabs, {
+    breaches: (pwOnly) => breachesView(r, pwOnly), advice: () => adviceView(r), findings: () => findingsView(r),
+    domain: () => emailDomainView(r), profile: () => profileView(r),
+  });
+
+  let verdict;
+  if (!r.breaches.checked) {
+    verdict = h("div", { class: "verdict warn" }, `Breach lookup failed: ${r.errors.breaches || "unknown error"}`);
+  } else if (s.password_breaches) {
+    verdict = h("div", { class: "verdict bad" }, `Passwords linked to this email were exposed in ${plural(s.password_breaches, "breach")}. Change those passwords now. See "What to do".`);
+  } else if (s.breaches) {
+    verdict = h("div", { class: "verdict warn" }, `Found in ${plural(s.breaches, "breach")}, but no passwords were exposed. Expect more targeted spam and phishing.`);
+  } else {
+    verdict = h("div", { class: "verdict good" }, "Good news: this email isn't in any known data breach.");
+  }
+
+  render(h("section", {},
+    resultHeader(r.meta.email, [
+      h("span", {}, new Date(r.meta.started).toLocaleString()), "·", h("span", {}, `${r.meta.duration_s}s`),
+      h("span", { class: "badge accent" }, `via ${r.breaches.provider}`)],
+    actionBar(id, () => startEmailCheck(r.meta.email), "Check again")),
+    verdict,
+    h("div", { class: "cards" },
+      h("button", { class: "card high", type: "button", onclick: () => t.open("breaches") }, h("div", { class: "n" }, s.breaches), h("div", { class: "l" }, "breaches")),
+      h("button", { class: "card medium", type: "button", onclick: () => t.open("breaches", true) }, h("div", { class: "n" }, s.password_breaches), h("div", { class: "l" }, "passwords exposed")),
+      h("div", { class: "card high" }, h("div", { class: "n" }, s.plaintext_breaches), h("div", { class: "l" }, "readable / weak")),
+      h("div", { class: "card" }, h("div", { class: "n" }, s.first_year || "—",
+        s.latest_year && s.latest_year !== s.first_year ? h("span", { class: "sub" }, ` → ${s.latest_year}`) : null), h("div", { class: "l" }, "years"))),
+    t.bar, t.panel,
+    commandBox("Same check in terminal", `domainscope-email ${r.meta.email}`)));
+  t.first();
+}
+
+function breachesView(r, passwordsFirst) {
+  const items = r.breaches.items;
+  if (!items.length) {
+    return h("div", { class: "panel" }, h("div", { class: "empty" },
+      r.breaches.checked ? "Not found in any known breach." : `Lookup failed: ${r.errors.breaches || ""}`));
+  }
+  let q = "";
+  let pwOnly = !!passwordsFirst;
+  const list = h("div", { class: "breach-list" });
+  const search = h("input", { type: "search", class: "search", placeholder: "Search breaches or data types…", "aria-label": "Search breaches" });
+  const pwBox = h("input", { type: "checkbox", checked: pwOnly });
+  const counter = h("span", { class: "muted" });
+
+  function draw() {
+    const rows = items.filter((b) => (!pwOnly || b.password_exposed)
+      && (!q || `${b.title} ${b.domain} ${b.data.join(" ")} ${b.industry}`.toLowerCase().includes(q)));
+    counter.textContent = `${rows.length} of ${items.length}`;
+    list.replaceChildren(...(rows.length ? rows.map(breachCard) : [h("div", { class: "empty" }, "No breaches match.")]));
+  }
+  search.addEventListener("input", () => { q = search.value.toLowerCase(); draw(); });
+  pwBox.addEventListener("change", () => { pwOnly = pwBox.checked; draw(); });
+  draw();
+  return h("div", {},
+    h("div", { class: "toolbar" }, search,
+      h("label", { class: "toggle inline" }, pwBox, h("span", { class: "switch" }), h("span", {}, "Exposed passwords only")),
+      counter),
+    list);
+}
+
+function breachCard(b) {
+  const risk = b.password_exposed ? RISK[b.password_risk] || RISK.unknown : null;
+  return h("article", { class: `breach-card ${b.password_exposed ? "pw" : ""}` },
+    h("div", { class: "breach-head" },
+      h("div", {},
+        h("div", { class: "breach-title" }, b.title),
+        h("div", { class: "breach-sub" },
+          b.domain ? h("span", { class: "mono" }, b.domain) : null,
+          b.industry ? h("span", {}, b.industry) : null,
+          b.records ? h("span", {}, `${fmtNum(b.records)} accounts`) : null)),
+      h("div", { class: "breach-date" }, b.date || "date unknown")),
+    risk ? h("div", {}, h("span", { class: `tag ${risk[0]}` }, risk[1]), h("span", { class: "muted", style: "font-size:13px;margin-left:6px" }, "Change this password, and anywhere you reused it.")) : null,
+    h("div", { class: "breach-data" }, b.data.map((d) => h("span", { class: `tag ${/password/i.test(d) ? "warn" : ""}` }, d))),
+    b.description ? h("details", {}, h("summary", {}, "About this breach"), h("p", {}, b.description)) : null);
+}
+
+function adviceView(r) {
+  return h("div", { class: "advice" }, r.advice.map((tip, i) => h("article", { class: `advice-item p-${tip.priority}` },
+    h("div", { class: "advice-num" }, i + 1),
+    h("div", {}, h("div", { class: "finding-title" }, tip.title), h("p", {}, tip.detail)),
+    h("span", { class: `pill ${tip.priority === "high" ? "high" : tip.priority === "medium" ? "medium" : "low"}` }, tip.priority))));
+}
+
+function emailDomainView(r) {
+  const d = r.domain_info;
+  const p = d.provider_type;
+  return h("div", {},
+    h("div", { class: "tiles" },
+      tile("Provider", p === "disposable" ? "warn" : "neutral", { disposable: "Disposable", free: "Free webmail", custom: "Own domain" }[p],
+        p === "disposable" ? "A throwaway inbox service." : p === "free" ? "A large public email provider." : "A company or personal domain."),
+      tile("Receives mail", d.mx.length ? "good" : "bad", d.mx.length ? "Yes" : "No", d.mx.length ? `${plural(d.mx.length, "mail server")} (MX)` : "No MX records."),
+      spfTile(d.email_security.spf), dmarcTile(d.email_security.dmarc)),
+    h("div", { class: "panel" },
+      h("dl", { class: "kv" },
+        h("dt", {}, "Domain"), h("dd", { class: "mono" }, r.meta.domain),
+        h("dt", {}, "Mail servers"), h("dd", { class: "mono" }, d.mx.join(", ") || "—"),
+        h("dt", {}, "SPF"), h("dd", {}, d.email_security.spf ? h("code", {}, d.email_security.spf.record) : "—"),
+        h("dt", {}, "DMARC"), h("dd", {}, d.email_security.dmarc ? h("code", {}, d.email_security.dmarc.record) : "—")),
+      p === "custom" ? h("div", { class: "notice" }, "Want the full picture? ",
+        h("a", { href: "#/", onclick: () => { store.set("ds.lastDomain", r.meta.domain); store.set("ds.task", "full"); store.set("ds.opts", DEFAULT_OPTS); } },
+          `Run a full domain scan on ${r.meta.domain}`), ".") : null));
+}
+
+function profileView(r) {
+  const g = r.gravatar;
+  if (!g) return h("div", { class: "panel" }, h("p", { class: "muted" }, `Gravatar lookup failed: ${r.errors?.gravatar || "unknown"}`));
+  if (!g.profile && !g.has_avatar) {
+    return h("div", { class: "panel" }, h("div", { class: "empty" }, "Nothing public on Gravatar for this email."));
+  }
+  const p = g.profile || {};
+  const avatar = safeUrl(g.avatar_url);
+  const row = (k, v) => (v ? [h("dt", {}, k), h("dd", {}, v)] : null);
+  const profileUrl = safeUrl(p.profile_url);
+  return h("div", { class: "panel profile" },
+    avatar ? h("img", { src: avatar, alt: "Gravatar avatar", class: "avatar", referrerpolicy: "no-referrer" }) : null,
+    h("div", {},
+      h("h3", {}, p.display_name || "Avatar only"),
+      h("dl", { class: "kv" },
+        row("Location", p.location), row("Job", [p.job_title, p.company].filter(Boolean).join(" at ")),
+        row("Pronouns", p.pronouns), row("About", p.description),
+        row("Profile", profileUrl ? h("a", { href: profileUrl, target: "_blank", rel: "noopener noreferrer" }, profileUrl) : null),
+        p.verified_accounts?.length ? [h("dt", {}, "Linked accounts"), h("dd", {}, p.verified_accounts.map((a) => {
+          const u = safeUrl(a.url);
+          return u ? h("a", { class: "tag", href: u, target: "_blank", rel: "noopener noreferrer" }, a.service || "account") : h("span", { class: "tag" }, a.service || "account");
+        }))] : null),
+      h("p", { class: "muted", style: "font-size:13px" }, "Anyone who knows this email can see this profile.")));
+}
+
+/* ================================================================== settings */
+
+async function showSettings() {
+  render(h("div", { class: "empty" }, h("span", { class: "spinner", style: "display:inline-block" })));
+  let s;
+  try { s = await api.get("/api/settings"); } catch (ex) { render(h("div", { class: "empty" }, ex.message)); return; }
+
+  const status = h("div", {});
+  const keyInput = h("input", { type: "password", class: "domain-input", placeholder: "Paste your HIBP API key", autocomplete: "off", spellcheck: "false", "aria-label": "HIBP API key" });
+  const msg = h("div", { class: "form-error", role: "alert" });
+
+  function drawStatus() {
+    status.replaceChildren(s.hibp_key_set
+      ? h("div", { class: "verdict good" }, `Using Have I Been Pwned (key ${s.hibp_key_masked}${s.hibp_key_source === "environment" ? ", from the HIBP_API_KEY environment variable" : ""}).`)
+      : h("div", { class: "verdict warn" }, "No key set. Using XposedOrNot (free, about 25 email checks per hour)."));
+  }
+  async function save(value) {
+    msg.textContent = "";
+    try {
+      s = await api.put("/api/settings", { hibp_api_key: value });
+      keyInput.value = "";
+      drawStatus();
+      toast(value ? "API key saved" : "API key removed");
+    } catch (ex) { msg.textContent = ex.message; }
+  }
+  drawStatus();
+
+  render(h("section", { class: "settings" },
+    h("div", { class: "hero" }, h("h1", {}, "Settings"), h("p", {}, "Optional extras. Everything works without changing anything here.")),
+    h("div", { class: "panel" },
+      h("h3", {}, "Have I Been Pwned API key"),
+      h("p", { class: "muted" }, "Email checks use the free XposedOrNot service by default. If you have a ",
+        h("a", { href: "https://haveibeenpwned.com/API/Key", target: "_blank", rel: "noopener noreferrer" }, "Have I Been Pwned API key"),
+        ", add it here for HIBP's breach data and higher limits. The key is stored only on this computer."),
+      status,
+      h("form", { class: "domain-row", style: "margin-top:12px", onsubmit: (e) => { e.preventDefault(); if (keyInput.value.trim()) save(keyInput.value.trim()); } },
+        keyInput,
+        h("button", { class: "btn btn-primary", type: "submit" }, "Save key"),
+        s.hibp_key_source === "settings" ? h("button", { class: "btn btn-danger", type: "button", onclick: () => save(null) }, "Remove") : null),
+      msg),
+    h("div", { class: "panel" },
+      h("h3", {}, "Privacy"),
+      h("ul", { class: "plain" },
+        h("li", {}, "Everything runs on this computer. The app only listens on 127.0.0.1."),
+        h("li", {}, "Password checks happen inside this page. Only the first 5 characters of the password's SHA-1 hash are sent (k-anonymity); the password is never sent or saved."),
+        h("li", {}, "Scan history is stored in: ", h("code", {}, s.data_dir)))),
+    h("div", { class: "panel" },
+      h("h3", {}, "Use it responsibly"),
+      h("p", { class: "muted", style: "margin:0" }, "Scan domains you own or have permission to test, and check email addresses that are yours or whose owner agreed. Breach data is shown at the level of which sites leaked what; actual leaked passwords are never retrieved."))));
+}
+
+/* ================================================================== boot */
 
 (async function boot() {
   try {

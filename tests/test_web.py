@@ -74,7 +74,7 @@ def test_full_scan_lifecycle(client):
     resp = client.post("/api/scans", json={"domain": "https://Example.com/x", "email": False})
     assert resp.status_code == 202
     scan_id = resp.json()["id"]
-    assert resp.json()["domain"] == "example.com"
+    assert resp.json()["target"] == "example.com"
 
     events = read_events(client, scan_id)
     assert [e["type"] for e in events] == ["progress", "progress", "done"]

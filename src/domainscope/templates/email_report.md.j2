@@ -1,0 +1,54 @@
+{% macro cell(v) %}{{ (v if v is not none else "-")|string|replace("|", "\\|")|replace("\n", " ") }}{% endmacro %}
+# domainscope email report: {{ r.meta.email }}
+
+- **Checked:** {{ r.meta.started }} ({{ r.meta.duration_s }}s)
+- **Breach data:** {{ r.breaches.provider }}
+- **Breaches:** {{ r.summary.breaches }} · **passwords exposed:** {{ r.summary.password_breaches }}
+
+## Findings
+
+{% if r.findings %}
+| Severity | Finding | Detail |
+|---|---|---|
+{% for f in r.findings %}
+| {{ f.severity|upper }} | {{ cell(f.title) }} | {{ cell(f.detail) }} |
+{% endfor %}
+{% else %}
+No findings.
+{% endif %}
+
+## What to do
+
+{% for t in r.advice %}
+{{ loop.index }}. **{{ t.title }}**: {{ t.detail }}
+{% endfor %}
+
+## Breaches
+
+{% if r.breaches["items"] %}
+| Breach | Date | Password | Data exposed |
+|---|---|---|---|
+{% for b in r.breaches["items"] %}
+| {{ cell(b.title) }} | {{ b.date }} | {{ b.password_risk if b.password_exposed else "no" }} | {{ cell(b.data|join(", ")) }} |
+{% endfor %}
+{% else %}
+Not found in any known breach.
+{% endif %}
+
+## Email domain
+
+- **Provider type:** {{ r.domain_info.provider_type }}
+- **MX:** {{ r.domain_info.mx|join(", ") or "none" }}
+- **SPF:** {{ r.domain_info.email_security.spf.record if r.domain_info.email_security.spf else "missing" }}
+- **DMARC:** {{ r.domain_info.email_security.dmarc.record if r.domain_info.email_security.dmarc else "missing" }}
+
+## Public profile
+
+{% if r.gravatar and r.gravatar.profile %}
+Gravatar profile: {{ r.gravatar.profile.display_name or "(no name)" }}{% if r.gravatar.profile.location %}, {{ r.gravatar.profile.location }}{% endif %}
+
+{% elif r.gravatar and r.gravatar.has_avatar %}
+Public Gravatar avatar only.
+{% else %}
+Nothing public on Gravatar.
+{% endif %}

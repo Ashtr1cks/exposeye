@@ -25,6 +25,8 @@ Pick what you want to find out, type a domain, and press **Run scan**. No comman
 | **Find subdomains** | Certificate-log search, dangling-CNAME / takeover detection |
 | **Website security check** | Security headers, TLS certificate, version leaks |
 | **Who owns it?** | Registrar, dates, name servers, abuse contact |
+| **Email exposure check** | Which data breaches include an email, and whether passwords leaked |
+| **Has my password leaked?** | Checks a password against 900M+ leaked passwords, privately |
 
 Results show a one-line verdict, severity counts, and tabs for findings, hosts, DNS, email,
 websites and registration. Each finding has a **What does this mean?** explanation. Scans are
@@ -34,6 +36,36 @@ for every scan so you can script it later.
 <details><summary>Screenshot: new scan form</summary>
 
 ![domainscope new scan form](docs/app-new-scan.png)
+</details>
+
+### Email exposure check
+
+Answers two questions: *which breaches is this email in?* and *was my password exposed?*
+
+- **Breaches:** site, date, number of accounts, and what leaked (passwords, phone numbers, and so
+  on). Password storage is graded where known: plain text, weakly hashed, or strongly hashed.
+- **What to do:** a prioritised action list naming the exact sites whose passwords you should
+  change.
+- **Email domain:** whether the domain receives mail, whether it's free, custom or disposable, and
+  its SPF/DMARC.
+- **Public profile:** any Gravatar profile and linked accounts tied to the address.
+
+Breach data comes from [XposedOrNot](https://xposedornot.com) by default (free, no key, about 25
+checks an hour). Add a [Have I Been Pwned](https://haveibeenpwned.com/API/Key) key in **Settings**
+or set `HIBP_API_KEY` to use HIBP instead.
+
+**Password check privacy:** the password is hashed with SHA-1 inside the app page, and only the
+first 5 hex characters are sent to the
+[Pwned Passwords range API](https://haveibeenpwned.com/API/v3#PwnedPasswords). The API returns
+every leaked hash with that prefix, padded with decoys, and the match happens locally
+(k-anonymity). The password never reaches domainscope's own server, disk or history.
+
+By design, domainscope never retrieves actual leaked passwords, and it doesn't probe sign-up or
+reset pages to enumerate accounts. Check your own address, or someone else's with their consent.
+
+<details><summary>Screenshot: email exposure results</summary>
+
+![domainscope email results](docs/app-email.png)
 </details>
 
 **Start it:**
@@ -122,6 +154,14 @@ python -m domainscope --help               # works without the console script to
 The JSON report has a stable structure (`meta`, `rdap`, `dns`, `email`, `hosts`, `asn`, `http`,
 `tls`, `findings`, `summary`, `errors`), so you can pipe it into `jq` or other tools.
 
+### Email checks from the terminal
+
+```bash
+domainscope-email you@example.com --open     # breach report (HTML/MD/JSON)
+domainscope-email --password                  # hidden prompt, k-anonymity check
+domainscope-email you@example.com --hibp-key KEY
+```
+
 ## Project layout
 
 ```text
@@ -130,8 +170,11 @@ src/domainscope/
 ├── web/
 │   ├── server.py       # FastAPI API: background scans, SSE progress, history
 │   └── static/         # single-page UI (vanilla JS, no build step)
-├── cli.py              # argparse + rich terminal UI
-├── scanner.py          # runs modules, aggregates findings
+├── cli.py              # domain CLI (argparse + rich)
+├── email_cli.py        # email/password CLI
+├── scanner.py          # domain scan: runs modules, aggregates findings
+├── emailcheck.py       # email check: breaches, domain, profile, advice
+├── settings.py         # ~/.domainscope/settings.json (optional HIBP key)
 ├── report.py           # JSON / Markdown / HTML rendering
 ├── templates/          # Jinja2 report templates (HTML is self-contained)
 └── modules/
@@ -141,7 +184,10 @@ src/domainscope/
     ├── subdomains.py   # crt.sh + Cert Spotter
     ├── asn.py          # Team Cymru DNS lookups
     ├── http_probe.py   # headers, fingerprinting
-    └── tls_info.py     # certificate inspection (stdlib ssl)
+    ├── tls_info.py     # certificate inspection (stdlib ssl)
+    ├── breaches.py     # XposedOrNot / HIBP breach lookups
+    ├── passwords.py    # Pwned Passwords k-anonymity check
+    └── email_identity.py  # provider type, disposable list, Gravatar
 tests/                  # offline unit + API tests (no network needed)
 ```
 

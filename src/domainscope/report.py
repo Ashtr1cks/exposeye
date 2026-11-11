@@ -28,12 +28,22 @@ def _render(template: str, result: dict) -> str:
     return _env.get_template(template).render(r=result, severities=SEVERITIES)
 
 
+def is_email(result: dict) -> bool:
+    return (result.get("meta") or {}).get("kind") == "email"
+
+
+def report_name(result: dict) -> str:
+    """Filesystem-friendly subject: the domain, or the email with @ replaced."""
+    meta = result["meta"]
+    return meta["email"].replace("@", "_at_") if is_email(result) else meta["domain"]
+
+
 def to_markdown(result: dict) -> str:
-    return _render("report.md.j2", result)
+    return _render("email_report.md.j2" if is_email(result) else "report.md.j2", result)
 
 
 def to_html(result: dict) -> str:
-    return _render("report.html", result)
+    return _render("email_report.html" if is_email(result) else "report.html", result)
 
 
 RENDERERS = {"html": to_html, "md": to_markdown, "json": to_json}
@@ -43,7 +53,7 @@ def write_reports(result: dict, out_dir: str | Path, formats: list[str]) -> list
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    base = f"{result['meta']['domain']}_{stamp}"
+    base = f"{report_name(result)}_{stamp}"
     written = []
     for fmt in formats:
         path = out / f"{base}.{fmt}"

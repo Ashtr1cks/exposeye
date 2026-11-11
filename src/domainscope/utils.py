@@ -43,6 +43,26 @@ def normalize_domain(raw: str) -> str:
     return host
 
 
+_LOCAL_PART_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]{1,64}$")
+
+
+def normalize_email(raw: str) -> str:
+    """Validate and normalise an email address (lower-cased, IDNA domain)."""
+    s = (raw or "").strip()
+    if s.lower().startswith("mailto:"):
+        s = s[7:]
+    local, sep, domain = s.rpartition("@")
+    if not sep or not local or not _LOCAL_PART_RE.match(local) or ".." in local:
+        raise ValueError(f"invalid email address: {raw!r}")
+    if local.startswith(".") or local.endswith("."):
+        raise ValueError(f"invalid email address: {raw!r}")
+    try:
+        domain = normalize_domain(domain)
+    except ValueError as exc:
+        raise ValueError(f"invalid email address: {raw!r}") from exc
+    return f"{local.lower()}@{domain}"
+
+
 def make_session() -> requests.Session:
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT})
