@@ -438,3 +438,14 @@ details.inline-more[open] summary { display: block; margin: 4px 0; }
 }
 .lg.low { background: var(--low); }
 .lg.ring { background: var(--muted); box-shadow: 0 0 0 2px var(--medium); }
+
+/* map: provider regions in the legend */
+.lg.region { border: 1.5px solid var(--muted); background: var(--panel-2); border-radius: 4px; width: 16px; height: 12px; }
+.map-wrap .toolbar select { padding: 7px 10px; }
+
+/* map full screen (native :fullscreen or overlay fallback) */
+.map-wrap.is-full { position: fixed; inset: 0; z-index: 60; background: var(--bg); padding: 16px 18px; display: flex; flex-direction: column; overflow: hidden; }
+.map-wrap.is-full .map-layout { flex: 1; min-height: 0; align-items: stretch; grid-template-rows: minmax(0, 1fr); }
+.map-wrap.is-full .map-panel, .map-wrap.is-full .map-canvas { height: 100%; }
+.map-wrap.is-full .map-details { max-height: none; height: 100%; }
+.map-wrap:fullscreen { background: var(--bg); }

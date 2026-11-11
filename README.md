@@ -123,11 +123,23 @@ to via CNAME. It surfaces patterns a table hides:
   open port, takeover). Bigger nodes have more open ports, and amber rings mark sensitive-sounding
   names.
 
-Click any node for details (ports, ranked CVEs, website, hosts sharing an IP). Hover to highlight
-a host's chain through IP to provider, and search to find a node. Large scans stay readable with
-**Group by network**, **Risky only** and an optional **Include historical**, and **Save PNG**
-exports the map for a report. The graph uses [Cytoscape.js](https://js.cytoscape.org/) (MIT),
-bundled locally so the app works offline and never loads code from the internet.
+**Grouped by provider (default):** each hosting provider (Amazon AWS, Cloudflare, Microsoft
+Azure…) gets its own region, laid out separately and packed with gaps between them. A region's
+border shows the worst risk inside it. Outside services and names that no longer resolve get
+their own regions too, and the domain links once to each region instead of to every host.
+**Free-form** switches to a force-directed view.
+
+**Semantic zoom:** as you zoom in, dots grow more slowly than the space between them, so the map
+spreads out instead of just getting bigger. Text stays a constant, readable size, and labels
+appear in tiers: providers and risky hosts first, then all hosts, then IP addresses. Whatever you
+hover, select or search for is always labelled.
+
+**Full screen** expands the map to the whole screen (Esc to exit). Click any node or region for
+details (ports, ranked CVEs, website, hosts sharing an IP or provider). Hover to highlight a
+host's chain through IP to provider, and search to find a node. **Risky only**, **Hide IPs** and
+**Include historical** keep big scans readable, and **Save PNG** exports the map for a report. The
+graph uses [Cytoscape.js](https://js.cytoscape.org/) (MIT), bundled locally so the app works
+offline and never loads code from the internet.
 
 ![Association map (demo data)](docs/app-map.png)
 

@@ -42,6 +42,8 @@ const ICONS = {
   external: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5"/>',
   refresh: '<path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  shrink: '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>',
   server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
   bell: '<path d="M6 8a6 6 0 0112 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 003.4 0"/>',
   diff: '<path d="M8 3v12M4 7l4-4 4 4M16 21V9M12 17l4 4 4-4"/>',
@@ -249,7 +251,7 @@ const RISK = {
 
 /* ================================================================== state & history */
 
-const state = { stream: null, tick: null, jobs: {}, history: [], running: [], cy: null, monitorTimer: null };
+const state = { stream: null, tick: null, jobs: {}, history: [], running: [], cy: null, mapCleanup: null, monitorTimer: null };
 
 function closeStream() {
   if (state.stream) { state.stream.close(); state.stream = null; }
@@ -303,7 +305,7 @@ async function refreshBadge() {
 
 function route() {
   closeStream();
-  destroyMap();
+  teardownMap();
   clearTimeout(state.monitorTimer);
   const [, view, id, sub] = location.hash.split("/");
   if (view === "scan" && id) showResult(id, sub);
@@ -657,7 +659,7 @@ function tabbed(kind, tabs, views) {
   const bar = h("div", { class: "tabs", role: "tablist" });
   if (!tabs.some(([k]) => k === tabState[kind])) tabState[kind] = tabs[0][0];
   function open(key, arg) {
-    destroyMap();
+    teardownMap();
     tabState[kind] = key;
     // Reflect the tab in the URL (bookmarkable) without re-running the router.
     const parts = location.hash.split("/");
@@ -919,6 +921,11 @@ function destroyMap() {
   if (state.cy) { state.cy.destroy(); state.cy = null; }
 }
 
+function teardownMap() {
+  destroyMap();
+  if (state.mapCleanup) { state.mapCleanup(); state.mapCleanup = null; }
+}
+
 const mapEligible = (r) => r.hosts.filter((x) => x.ips.length && !x.wildcard).length >= MAP_MIN_HOSTS;
 
 function ipRisk(exp, ip) {
@@ -942,18 +949,45 @@ function hostRisk(x, r, tlsBy) {
   return risk;
 }
 
+// Registry names like "AMAZON-02" or "MICROSOFT-CORP-MSN-AS-BLOCK" -> names people recognise.
+const PROVIDERS = [
+  [/^AMAZON/i, "Amazon AWS"], [/^CLOUDFLARE/i, "Cloudflare"], [/^MICROSOFT/i, "Microsoft Azure"],
+  [/^GOOGLE/i, "Google Cloud"], [/LINODE/i, "Linode (Akamai)"], [/^AKAMAI/i, "Akamai"], [/^FASTLY/i, "Fastly"],
+  [/^DIGITALOCEAN/i, "DigitalOcean"], [/^HETZNER/i, "Hetzner"], [/^OVH/i, "OVH"], [/^GITHUB/i, "GitHub"],
+  [/^ORACLE/i, "Oracle Cloud"], [/^VERCEL/i, "Vercel"], [/^NETLIFY/i, "Netlify"], [/^SHOPIFY/i, "Shopify"],
+  [/^AUTOMATTIC/i, "Automattic (WordPress)"], [/INCAPSULA|IMPERVA/i, "Imperva"], [/^TELSTRA/i, "Telstra"],
+  [/^OPTUS/i, "Optus"], [/^ZEN-ECN|^ZEN/i, "Zen"], [/^SQUARESPACE/i, "Squarespace"], [/^WIX/i, "Wix"],
+];
 const netName = (r, ip) => {
   const a = r.asn?.[ip];
   if (!a) return "Unknown network";
-  return (a.as_name || `AS${a.asn}`).split(/ - |,/)[0].trim();
+  const raw = (a.as_name || `AS${a.asn}`).split(/ - |,/)[0].trim();
+  const known = PROVIDERS.find(([re]) => re.test(raw));
+  if (known) return known[1];
+  return raw.replace(/-(AS|ASN|NET|AS-BLOCK|AP|BLOCK)(-\d+)?$/i, "").replace(/-\d+$/, "") || raw;
 };
 
 function buildGraph(r, opt) {
   const domain = r.meta.domain;
+  const grouped = opt.layout !== "free";
   const tlsBy = Object.fromEntries((r.tls || []).map((t) => [t.host, t]));
   const nodes = new Map();
   const edges = [];
-  const node = (id, data) => { if (!nodes.has(id)) nodes.set(id, { data: { id, size: 20, ...data } }); return nodes.get(id).data; };
+  const edgeIds = new Set();
+  const node = (id, data) => {
+    if (!nodes.has(id)) nodes.set(id, { data: { id, size: 20, risk: "none", ...data } });
+    return nodes.get(id).data;
+  };
+  const edge = (source, target, kind) => {
+    const id = `e:${source}>${target}`;
+    if (!edgeIds.has(id)) { edgeIds.add(id); edges.push({ data: { id, source, target, kind } }); }
+  };
+  const group = (key, name, special) => {
+    const gid = `g:${key}`;
+    node(gid, { name, label: name, kind: "group", special: !!special });
+    return gid;
+  };
+  const bump = (id, risk) => { const d = nodes.get(id).data; d.risk = worse(d.risk, risk); };
   const short = (name) => (name === domain ? domain : name.endsWith(`.${domain}`) ? name.slice(0, -domain.length - 1) : name);
 
   let hosts = r.hosts.filter((x) => !x.wildcard && (opt.historical || x.ips.length || x.cname));
@@ -964,92 +998,231 @@ function buildGraph(r, opt) {
   hosts = hosts.slice(0, MAP_MAX_HOSTS);
 
   const rootId = `h:${domain}`;
-  node(rootId, { label: domain, kind: "root", risk: "none", name: domain });
+  node(rootId, { label: domain, kind: "root", name: domain, size: 34 });
   for (const { x, risk } of hosts) {
     const id = `h:${x.name}`;
-    const d = node(id, { label: short(x.name), kind: x.name === domain ? "root" : "host", name: x.name, risk,
-      size: 18 + Math.min((x.ports || []).length, 8) * 3, historical: !x.ips.length, interesting: !!x.interesting });
+    const isRoot = id === rootId;
+    const d = node(id, {});
+    Object.assign(d, {
+      label: isRoot ? domain : short(x.name), kind: isRoot ? "root" : "host", name: x.name,
+      size: isRoot ? 34 : 18 + Math.min((x.ports || []).length, 8) * 3,
+      historical: !x.ips.length, interesting: !!x.interesting,
+    });
     d.risk = worse(d.risk, risk);
-    if (id !== rootId) edges.push({ data: { id: `e:${rootId}>${id}`, source: rootId, target: id, kind: "sub" } });
+    if (grouped && !isRoot) {
+      d.parent = x.ips.length ? group(netName(r, x.ips[0]), netName(r, x.ips[0])) : group("__unresolved", "Not resolving", true);
+      bump(d.parent, risk);
+    }
+    if (!grouped && !isRoot) edge(rootId, id, "sub");
+
     if (x.cname) {
       const internal = x.cname === domain || x.cname.endsWith(`.${domain}`);
       const tid = internal ? `h:${x.cname}` : `x:${x.cname}`;
-      const t = node(tid, internal
-        ? { label: short(x.cname), kind: "host", name: x.cname, risk: "none", size: 18 }
-        : { label: x.cname, kind: "external", name: x.cname, risk: "none" });
-      if (x.dangling) t.risk = "high";
-      edges.push({ data: { id: `e:${id}>${tid}`, source: id, target: tid, kind: x.dangling ? "dangling" : "cname" } });
+      const t = internal
+        ? node(tid, { label: short(x.cname), kind: "host", name: x.cname, size: 18 })
+        : node(tid, { label: x.cname, kind: "external", name: x.cname, size: 22 });
+      if (grouped && !t.parent && tid !== rootId) {
+        t.parent = internal ? group("__unresolved", "Not resolving", true) : group("__external", "Outside services", true);
+      }
+      if (x.dangling) { t.risk = "high"; if (t.parent) bump(t.parent, "high"); }
+      edge(id, tid, x.dangling ? "dangling" : "cname");
     }
+
     for (const ip of x.ips) {
       const net = netName(r, ip);
-      const nid = `n:${net}`;
-      node(nid, { label: net, kind: "network", name: net, risk: "none", size: 30 });
-      if (opt.compact) {
-        const eid = `e:${id}>${nid}`;
-        if (!edges.some((e) => e.data.id === eid)) edges.push({ data: { id: eid, source: id, target: nid, kind: "ip" } });
-        nodes.get(nid).data.risk = worse(nodes.get(nid).data.risk, ipRisk(r.exposure, ip));
+      const ir = ipRisk(r.exposure, ip);
+      const ipSize = 12 + Math.min((r.exposure?.ips?.[ip]?.ports || []).length, 8) * 2;
+      if (grouped) {
+        const gid = group(net, net);
+        bump(gid, ir);
+        if (!opt.compact) {
+          node(`i:${ip}`, { label: ip, kind: "ip", name: ip, network: net, risk: ir, size: ipSize, parent: gid });
+          edge(id, `i:${ip}`, "ip");
+        }
       } else {
-        const iid = `i:${ip}`;
-        const ipNew = !nodes.has(iid);
-        node(iid, { label: ip, kind: "ip", name: ip, network: net, risk: ipRisk(r.exposure, ip),
-          size: 12 + Math.min((r.exposure?.ips?.[ip]?.ports || []).length, 8) * 2 });
-        edges.push({ data: { id: `e:${id}>${iid}`, source: id, target: iid, kind: "ip" } });
-        if (ipNew) edges.push({ data: { id: `e:${iid}>${nid}`, source: iid, target: nid, kind: "net" } });
-        nodes.get(nid).data.risk = worse(nodes.get(nid).data.risk, ipRisk(r.exposure, ip));
+        const nid = `n:${net}`;
+        node(nid, { label: net, kind: "network", name: net, size: 30 });
+        bump(nid, ir);
+        if (opt.compact) {
+          edge(id, nid, "ip");
+        } else {
+          node(`i:${ip}`, { label: ip, kind: "ip", name: ip, network: net, risk: ir, size: ipSize });
+          edge(id, `i:${ip}`, "ip");
+          edge(`i:${ip}`, nid, "net");
+        }
       }
     }
   }
-  return { elements: [...nodes.values(), ...edges], truncated, hostCount: hosts.length };
+
+  if (grouped) {
+    const all = [...nodes.values()].map((n) => n.data);
+    for (const g of all.filter((n) => n.kind === "group")) {
+      const members = all.filter((n) => n.parent === g.id);
+      if (!members.length) { nodes.delete(g.id); continue; }
+      const hostsN = members.filter((n) => n.kind === "host").length;
+      g.label = g.id === "g:__external" ? `${g.name} · ${members.length}` : `${g.name} · ${plural(hostsN, "host")}`;
+      if (g.id !== "g:__external") edge(rootId, g.id, "grp");
+    }
+  }
+  // Parents first, so every compound node exists before its children.
+  const list = [...nodes.values()];
+  const ordered = [...list.filter((n) => n.data.kind === "group"), ...list.filter((n) => n.data.kind !== "group")];
+  return { elements: [...ordered, ...edges], truncated, hostCount: hosts.length, grouped };
+}
+
+const REGION_PAD = 26;
+const REGION_MIN_W = 160;
+const REGION_MIN_H = 90;
+
+// Lay out each provider region on its own, then pack the regions into centred rows with gaps.
+function groupedLayout(cy, cytoscape) {
+  const groups = cy.nodes('[kind = "group"]');
+  const boxes = [];
+  groups.forEach((g) => {
+    const kids = g.children();
+    const inner = kids.edgesWith(kids);
+    const side = Math.max(130, Math.sqrt(kids.length) * 100);
+    if (kids.length === 1) {
+      kids.position({ x: 0, y: 0 });
+    } else {
+      // Run the sub-layout in a throwaway headless graph so the compound parent doesn't interfere.
+      const sub = cytoscape({
+        headless: true, styleEnabled: true,
+        style: [{ selector: "node", style: { width: "data(size)", height: "data(size)" } }],
+        elements: [
+          ...kids.map((n) => ({ data: { id: n.id(), size: n.data("size") || 20 } })),
+          ...inner.map((e) => ({ data: { id: e.id(), source: e.source().id(), target: e.target().id() } })),
+        ],
+      });
+      const bb = { x1: 0, y1: 0, w: side, h: side };
+      sub.layout(inner.length
+        ? { name: "cose", animate: false, randomize: true, fit: false, boundingBox: bb, padding: 0,
+          nodeRepulsion: () => 22000, idealEdgeLength: () => 55, gravity: 0.7, numIter: 1500, nodeOverlap: 24 }
+        : { name: "grid", fit: false, boundingBox: { x1: 0, y1: 0, w: side, h: Math.max(side, kids.length * 60) }, avoidOverlap: true,
+          avoidOverlapPadding: 40, cols: kids.length <= 8 ? 1 : undefined }).run();
+      const pos = {};
+      sub.nodes().forEach((n) => { pos[n.id()] = { x: n.position("x"), y: n.position("y") }; });
+      sub.destroy();
+      kids.positions((n) => pos[n.id()]);
+    }
+    const bb = kids.boundingBox({ includeLabels: false });
+    // The region's real size: its contents plus padding, never smaller than the minimum.
+    boxes.push({ g, bb, w: Math.max(bb.w + 2 * REGION_PAD, REGION_MIN_W), h: Math.max(bb.h + 2 * REGION_PAD, REGION_MIN_H) });
+  });
+
+  boxes.sort((a, b) => b.w * b.h - a.w * a.h);
+  const gap = 110;
+  const area = boxes.reduce((s, b) => s + (b.w + gap) * (b.h + gap), 0);
+  const rowMax = Math.max(650, Math.sqrt(area) * 1.7);
+  const rows = [[]];
+  let rowW = 0;
+  for (const b of boxes) {
+    if (rows.at(-1).length && rowW + b.w > rowMax) { rows.push([]); rowW = 0; }
+    rows.at(-1).push(b);
+    rowW += b.w + gap;
+  }
+  const width = Math.max(...rows.map((row) => row.reduce((s, b) => s + b.w, 0) + gap * (row.length - 1)));
+  let y = 0;
+  for (const row of rows) {
+    const rw = row.reduce((s, b) => s + b.w, 0) + gap * (row.length - 1);
+    let x = (width - rw) / 2;
+    const rowH = Math.max(...row.map((b) => b.h));
+    for (const b of row) {
+      // centre the contents inside the region's slot
+      const dx = x + (b.w - b.bb.w) / 2 - b.bb.x1;
+      const dy = y + (rowH - b.bb.h) / 2 - b.bb.y1;
+      b.g.children().positions((n) => ({ x: n.position("x") + dx, y: n.position("y") + dy }));
+      x += b.w + gap;
+    }
+    y += rowH + gap;
+  }
+  cy.nodes('[kind = "root"]').position({ x: width / 2, y: -150 });
 }
 
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
-function mapStyle() {
+// Semantic zoom: `z` holds the current and "fit" zoom. Zooming in makes dots grow slower than the
+// space between them (less clutter), keeps text a constant on-screen size, and reveals labels in tiers.
+function labelTier(d) {
+  if (d.kind === "root" || d.kind === "network" || d.kind === "group") return 0;
+  if (d.risk === "high" || d.risk === "medium" || d.interesting || d.kind === "external") return 1;
+  return d.kind === "host" ? 2 : 3;
+}
+
+function mapStyle(z) {
   const c = {
     high: cssVar("--high"), medium: cssVar("--medium"), low: cssVar("--low"), text: cssVar("--text"),
     muted: cssVar("--muted"), border: cssVar("--border"), panel: cssVar("--panel"), accent: cssVar("--accent"),
     bg: cssVar("--panel-2"),
   };
-  const riskColor = (k) => `node[risk = "${k}"]`;
+  const rel = () => Math.max(z.zoom / z.base, 0.05);
+  const k = () => Math.pow(rel(), -0.55); // dots grow ~rel^0.45 on screen while spacing grows ~rel
+  const ek = () => Math.pow(rel(), -0.75);
+  const px = (n) => n / z.zoom; // a constant number of screen pixels
+  const tier = () => (rel() < 1.5 ? 1 : rel() < 2.6 ? 2 : 3);
+  const label = (ele) => (ele.hasClass("labelled") || labelTier(ele.data()) <= tier() ? ele.data("label") : "");
+  const size = (fixed) => (ele) => (fixed ?? ele.data("size")) * k();
+  const riskColor = (key) => `node[risk = "${key}"]`;
   return [
     { selector: "node", style: {
-      label: "data(label)", "font-size": 10, color: c.text, "text-valign": "bottom", "text-margin-y": 4,
-      "text-outline-color": c.panel, "text-outline-width": 2, "background-color": c.muted,
-      width: "data(size)", height: "data(size)", "border-width": 0, "min-zoomed-font-size": 7 } },
-    { selector: 'node[kind = "root"]', style: { "background-color": c.accent, shape: "round-diamond", width: 34, height: 34, "font-size": 12, "font-weight": 700 } },
+      label, "font-size": () => px(11), color: c.text, "text-valign": "bottom", "text-margin-y": () => px(4),
+      "text-outline-color": c.panel, "text-outline-width": () => px(2.5), "background-color": c.muted,
+      width: size(), height: size(), "border-width": 0 } },
+    { selector: 'node[kind = "root"]', style: { "background-color": c.accent, shape: "round-diamond", width: size(34), height: size(34),
+      "font-size": () => px(13), "font-weight": 700 } },
     { selector: 'node[kind = "host"]', style: { shape: "ellipse" } },
-    { selector: 'node[kind = "ip"]', style: { shape: "round-rectangle", "font-size": 8, "background-color": c.muted, color: c.muted } },
-    { selector: 'node[kind = "external"]', style: { shape: "round-tag", width: 22, height: 22, "background-color": "#8b5cf6" } },
-    { selector: 'node[kind = "network"]', style: { shape: "round-rectangle", width: 34, height: 34, "background-color": c.bg,
-      "border-width": 2, "border-color": c.muted, "border-style": "dashed", "font-size": 11, "font-weight": 700, color: c.text } },
-    { selector: 'node[?historical]', style: { opacity: 0.45 } },
-    { selector: 'node[?interesting]', style: { "border-width": 2, "border-color": c.medium } },
+    { selector: 'node[kind = "ip"]', style: { shape: "round-rectangle", "font-size": () => px(9.5), "background-color": c.muted, color: c.muted } },
+    { selector: 'node[kind = "external"]', style: { shape: "round-tag", width: size(22), height: size(22), "background-color": "#8b5cf6" } },
+    { selector: 'node[kind = "network"]', style: { shape: "round-rectangle", width: size(34), height: size(34), "background-color": c.bg,
+      "border-width": () => px(2), "border-color": c.muted, "border-style": "dashed", "font-size": () => px(12), "font-weight": 700, color: c.text } },
+    { selector: "node[?historical]", style: { opacity: 0.45 } },
+    { selector: "node[?interesting]", style: { "border-width": () => px(2), "border-color": c.medium } },
     { selector: riskColor("low"), style: { "background-color": c.low } },
     { selector: riskColor("medium"), style: { "background-color": c.medium } },
     { selector: riskColor("high"), style: { "background-color": c.high } },
     { selector: 'node[kind = "network"][risk = "high"]', style: { "background-color": c.bg, "border-color": c.high } },
     { selector: 'node[kind = "network"][risk = "medium"]', style: { "background-color": c.bg, "border-color": c.medium } },
-    { selector: "edge", style: { width: 1.2, "line-color": c.muted, "curve-style": "haystack", opacity: 0.55 } },
+    // Provider regions (compound nodes). Fill stays neutral; the border shows the worst risk inside.
+    { selector: 'node[kind = "group"]', style: {
+      shape: "round-rectangle", "background-color": c.bg, "background-opacity": 0.92, "border-width": () => px(1.5),
+      "border-color": c.border, "border-style": "solid", label: "data(label)", "text-valign": "top", "text-halign": "center",
+      "text-margin-y": () => px(-6), "font-size": () => px(12.5), "font-weight": 700, color: c.muted, padding: REGION_PAD,
+      "compound-sizing-wrt-labels": "exclude", "min-width": REGION_MIN_W, "min-height": REGION_MIN_H,
+      "text-wrap": "ellipsis", "text-max-width": (ele) => ele.width() + 80 } },
+    { selector: 'node[kind = "group"][risk = "low"]', style: { "background-color": c.bg, "border-color": c.low } },
+    { selector: 'node[kind = "group"][risk = "medium"]', style: { "background-color": c.bg, "border-color": c.medium, "border-width": () => px(2) } },
+    { selector: 'node[kind = "group"][risk = "high"]', style: { "background-color": c.bg, "border-color": c.high, "border-width": () => px(2.5) } },
+    { selector: 'node[kind = "group"][?special]', style: { "border-style": "dashed" } },
+    { selector: "edge", style: { width: () => 1.2 * ek(), "line-color": c.muted, "curve-style": "haystack", opacity: 0.55 } },
     { selector: 'edge[kind = "sub"]', style: { opacity: 0.22 } },
+    { selector: 'edge[kind = "grp"]', style: { "curve-style": "straight", opacity: 0.3, width: () => 1.6 * ek(), "z-compound-depth": "bottom" } },
     { selector: 'edge[kind = "net"]', style: { "line-style": "dotted", opacity: 0.5 } },
-    { selector: 'edge[kind = "cname"]', style: { "line-style": "dashed", "line-color": "#8b5cf6", "curve-style": "bezier", width: 1.4 } },
-    { selector: 'edge[kind = "dangling"]', style: { "line-style": "dashed", "line-color": c.high, "curve-style": "bezier", width: 2 } },
+    { selector: 'edge[kind = "cname"]', style: { "line-style": "dashed", "line-color": "#8b5cf6", "curve-style": "bezier", width: () => 1.4 * ek() } },
+    { selector: 'edge[kind = "dangling"]', style: { "line-style": "dashed", "line-color": c.high, "curve-style": "bezier", width: () => 2 * ek() } },
     { selector: ".faded", style: { opacity: 0.12, "text-opacity": 0 } },
-    { selector: "node:selected", style: { "border-width": 3, "border-color": c.accent } },
-    { selector: ".match", style: { "border-width": 3, "border-color": c.accent } },
+    { selector: "node:selected", style: { "border-width": () => px(3), "border-color": c.accent } },
+    { selector: ".match", style: { "border-width": () => px(3), "border-color": c.accent } },
   ];
 }
 
 function mapView(r) {
   const saved = store.get("ds.map", {});
-  const opt = { riskyOnly: !!saved.riskyOnly, historical: !!saved.historical,
-    compact: saved.compact ?? r.hosts.filter((x) => x.ips.length).length > 60 };
-  const graphBox = h("div", { class: "map-canvas", role: "img", "aria-label": "Association map of hosts, IP addresses and networks" });
+  const opt = {
+    layout: saved.layout === "free" ? "free" : "grouped",
+    riskyOnly: !!saved.riskyOnly, historical: !!saved.historical,
+    compact: saved.compact ?? r.hosts.filter((x) => x.ips.length).length > 60,
+  };
+  const graphBox = h("div", { class: "map-canvas", role: "img", "aria-label": "Association map of hosts, IP addresses and hosting providers" });
   const details = h("aside", { class: "map-details" });
   const note = h("div", { class: "muted map-note" });
-  const search = h("input", { type: "search", class: "search", placeholder: "Find a host, IP or network…", "aria-label": "Search the map" });
+  const search = h("input", { type: "search", class: "search", placeholder: "Find a host, IP or provider…", "aria-label": "Search the map" });
+  const fullBtn = h("button", { class: "btn btn-sm", type: "button", title: "Full screen" }, icon("expand"), "Full screen");
+  const layoutSel = h("select", { "aria-label": "Map layout" },
+    h("option", { value: "grouped" }, "Grouped by provider"), h("option", { value: "free" }, "Free-form"));
+  layoutSel.value = opt.layout;
+  layoutSel.addEventListener("change", () => { opt.layout = layoutSel.value; store.set("ds.map", opt); draw(); });
 
   const toggle = (key, label) => {
     const box = h("input", { type: "checkbox", checked: opt[key] });
@@ -1057,16 +1230,15 @@ function mapView(r) {
     return h("label", { class: "toggle inline" }, box, h("span", { class: "switch" }), h("span", {}, label));
   };
 
-  const cy0 = () => state.cy;
   function showDetails(n) {
     if (!n) {
       details.replaceChildren(h("h3", {}, "Click anything on the map"),
-        h("p", { class: "muted" }, "Hover to highlight connections. Drag to rearrange, scroll to zoom."),
+        h("p", { class: "muted" }, "Hover to highlight connections. Drag to rearrange. Scroll to zoom: dots spread out and more names appear as you go in."),
         h("ul", { class: "legend" },
           legendItem("diamond accent", "The domain"),
+          legendItem("region", opt.layout === "free" ? "Hosting network (provider)" : "Region = hosting provider (border = worst risk inside)"),
           legendItem("dot", "Subdomain / host (bigger = more open ports)"),
           legendItem("square", "IP address"),
-          legendItem("box", "Hosting network (provider), grouping its IPs"),
           legendItem("tag", "Outside service (CNAME)"),
           legendItem("dot high", "Serious risk: known-exploited CVE, risky port, takeover"),
           legendItem("dot medium", "Elevated risk"),
@@ -1076,16 +1248,18 @@ function mapView(r) {
       return;
     }
     const d = n.data();
-    const kids = [h("div", { class: "map-kind" }, { root: "Domain", host: "Host", ip: "IP address", network: "Hosting network", external: "Outside service" }[d.kind]),
-      h("h3", { class: "mono" }, d.name)];
+    const kinds = { root: "Domain", host: "Host", ip: "IP address", network: "Hosting network", external: "Outside service",
+      group: d.id === "g:__external" ? "Outside services" : d.id === "g:__unresolved" ? "Not resolving" : "Hosting provider" };
+    const kids = [h("div", { class: "map-kind" }, kinds[d.kind]), h("h3", { class: "mono" }, d.name)];
     if (d.risk !== "none") kids.push(h("span", { class: `pill ${d.risk}` }, `${d.risk} risk`));
     const x = r.hosts.find((hh) => hh.name === d.name);
     const exp = r.exposure || { ips: {}, cves: {} };
     const row = (k, v) => (v ? h("div", { class: "row" }, h("span", {}, k), v) : null);
+    const rank = (c) => (exp.cves[c]?.kev ? 2 : 0) + (exp.cves[c]?.epss || 0);
     if ((d.kind === "host" || d.kind === "root") && x) {
       const p = (r.http || []).find((pp) => pp.host === x.name);
       const ports = [...new Set(x.ports || [])];
-      const vulns = [...(x.vulns || [])].sort((a, b) => ((exp.cves[b]?.kev ? 2 : 0) + (exp.cves[b]?.epss || 0)) - ((exp.cves[a]?.kev ? 2 : 0) + (exp.cves[a]?.epss || 0)));
+      const vulns = [...(x.vulns || [])].sort((a, b) => rank(b) - rank(a));
       kids.push(
         row("IPs", x.ips.length ? h("span", { class: "mono" }, x.ips.join(", ")) : h("span", { class: "muted" }, "doesn't resolve")),
         row("Points to", x.cname ? h("span", { class: "mono" }, x.cname) : null),
@@ -1104,12 +1278,24 @@ function mapView(r) {
         row("Ports", info?.ports.length ? info.ports.map(portChip) : h("span", { class: "muted" }, "none seen")),
         row("CVEs", info?.vulns.length ? [info.vulns.slice(0, 8).map((c) => cveChip(c, exp.cves[c])), info.vulns.length > 8 ? ` +${info.vulns.length - 8} more` : null] : null),
         row("Tags", info?.tags.length ? info.tags.map((t) => h("span", { class: "tag" }, t)) : null));
+    } else if (d.kind === "group") {
+      const members = n.children();
+      const names = members.filter('[kind = "host"], [kind = "external"]').map((m) => m.data("name"));
+      const ips = members.filter('[kind = "ip"]');
+      const risky = members.filter('[risk = "high"], [risk = "medium"]').filter('[kind != "ip"]').map((m) => m.data("name"));
+      const why = d.id === "g:__external"
+        ? "Services outside the domain that subdomains point to (CNAME). You depend on them, and a deleted account can lead to a subdomain takeover."
+        : d.id === "g:__unresolved"
+          ? "Names seen in certificate logs that don't resolve now. Mostly harmless leftovers, but dangling ones can be taken over."
+          : "Everything in this region runs on the same provider. An outage, misconfiguration or compromised server here can affect all of it.";
+      kids.push(row("Hosts", String(members.filter('[kind = "host"]').length)), row("IP addresses", ips.length ? String(ips.length) : null),
+        row("Needs attention", risky.length ? h("span", { class: "mono" }, risky.join(", ")) : null),
+        h("p", { class: "muted" }, why), h("div", { class: "mono map-list" }, names.slice(0, 40).join("\n")));
     } else if (d.kind === "network") {
-      const ipNodes = opt.compact ? cy0().collection() : n.connectedEdges().sources();
-      const ips = ipNodes.map((c) => c.data("name"));
+      const ipNodes = opt.compact ? state.cy.collection() : n.connectedEdges().sources();
       const hostNames = new Set((opt.compact ? n.connectedEdges().sources()
         : ipNodes.connectedEdges().sources().filter((s) => s.data("kind") !== "ip")).map((s) => s.data("name")));
-      kids.push(row("IP addresses", ips.length ? String(ips.length) : null), row("Hosts", String(hostNames.size)),
+      kids.push(row("IP addresses", ipNodes.length ? String(ipNodes.length) : null), row("Hosts", String(hostNames.size)),
         h("p", { class: "muted" }, "Everything hosted here shares infrastructure: a problem with this provider or server can affect all of them."),
         h("div", { class: "mono map-list" }, [...hostNames].slice(0, 30).join("\n")));
     } else if (d.kind === "external") {
@@ -1121,34 +1307,75 @@ function mapView(r) {
     details.replaceChildren(...kids.filter(Boolean));
   }
 
+  const z = { zoom: 1, base: 1 };
+  // Labels and sizes are relative to the "fit" zoom of the current container.
+  function calibrate() {
+    const cy = state.cy;
+    if (!cy) return;
+    z.base = cy.zoom();
+    z.zoom = cy.zoom();
+    cy.style().update();
+  }
+  function refit() {
+    setTimeout(() => {
+      const cy = state.cy;
+      if (!cy) return;
+      cy.resize();
+      cy.fit(undefined, 30);
+      calibrate();
+    }, 120);
+  }
+
   function draw() {
     destroyMap();
     const g = buildGraph(r, opt);
     note.textContent = `${plural(g.hostCount, "host")} shown${g.truncated ? ` (top ${MAP_MAX_HOSTS} by risk)` : ""}` +
-      (opt.compact ? " · grouped by network" : "") + (opt.riskyOnly ? " · risky only" : "");
+      (g.grouped ? " · grouped by provider" : "") + (opt.compact ? " · IPs hidden" : "") + (opt.riskyOnly ? " · risky only" : "") +
+      " · scroll to zoom: more names appear as you zoom in";
     showDetails(null);
     loadCytoscape().then((cytoscape) => {
       if (!graphBox.isConnected) return;
+      z.zoom = 1; z.base = 1;
       const cy = cytoscape({
-        container: graphBox, elements: g.elements, style: mapStyle(), wheelSensitivity: 0.25, minZoom: 0.15, maxZoom: 3,
-        layout: { name: "cose", animate: false, randomize: true, padding: 24, nodeRepulsion: () => 26000,
+        container: graphBox, elements: g.elements, style: mapStyle(z), wheelSensitivity: 0.25, minZoom: 0.05, maxZoom: 8,
+        layout: g.grouped ? { name: "preset" } : { name: "cose", animate: false, randomize: true, padding: 24, nodeRepulsion: () => 26000,
           idealEdgeLength: (e) => ({ sub: 95, ip: 45, net: 55, cname: 60, dangling: 60 }[e.data("kind")] || 60),
           edgeElasticity: (e) => (e.data("kind") === "sub" ? 40 : 120), nodeOverlap: 20, gravity: 0.2,
           numIter: 2500, componentSpacing: 80 },
       });
       state.cy = cy;
+      if (g.grouped) groupedLayout(cy, cytoscape);
+      cy.fit(undefined, 30);
+      calibrate();
+
+      let queued = false;
+      cy.on("zoom", () => {
+        if (queued) return;
+        queued = true;
+        setTimeout(() => { queued = false; if (state.cy === cy) { z.zoom = cy.zoom(); cy.style().update(); } }, 16);
+      });
+      const clear = () => cy.elements().removeClass("faded labelled");
       const focus = (ele) => {
-        cy.elements().addClass("faded");
-        let hood = ele.closedNeighborhood();
-        // Follow host -> IP -> hosting network so the whole chain stays visible.
-        const ipEdges = hood.nodes('[kind = "ip"]').connectedEdges('[kind = "net"]');
-        hood = hood.union(ipEdges).union(ipEdges.targets());
+        cy.elements().removeClass("labelled").addClass("faded");
+        let hood;
+        if (ele.data("kind") === "group") {
+          const inside = ele.descendants();
+          hood = ele.union(inside).union(inside.connectedEdges()).union(ele.connectedEdges());
+          hood = hood.union(hood.connectedNodes());
+        } else {
+          hood = ele.closedNeighborhood();
+          // Follow host -> IP -> hosting network so the whole chain stays visible.
+          const ipEdges = hood.nodes('[kind = "ip"]').connectedEdges('[kind = "net"]');
+          hood = hood.union(ipEdges).union(ipEdges.targets());
+        }
+        hood = hood.union(hood.nodes().ancestors()); // keep the regions around them visible
         hood.removeClass("faded");
+        hood.nodes().addClass("labelled"); // always label what you're looking at
       };
       cy.on("mouseover", "node", (e) => focus(e.target));
-      cy.on("mouseout", "node", () => { const sel = cy.$("node:selected"); if (sel.length) focus(sel); else cy.elements().removeClass("faded"); });
+      cy.on("mouseout", "node", () => { const sel = cy.$("node:selected"); if (sel.length) focus(sel); else clear(); });
       cy.on("tap", "node", (e) => { showDetails(e.target); focus(e.target); });
-      cy.on("tap", (e) => { if (e.target === cy) { cy.elements().removeClass("faded"); showDetails(null); } });
+      cy.on("tap", (e) => { if (e.target === cy) { clear(); showDetails(null); } });
       if (search.value) runSearch();
     }).catch((ex) => graphBox.replaceChildren(h("div", { class: "empty" }, ex.message)));
   }
@@ -1157,13 +1384,13 @@ function mapView(r) {
     const cy = state.cy;
     if (!cy) return;
     const q = search.value.trim().toLowerCase();
-    cy.elements().removeClass("match faded");
+    cy.elements().removeClass("match faded labelled");
     if (!q) return;
     const hits = cy.nodes().filter((n) => String(n.data("name")).toLowerCase().includes(q));
     cy.elements().addClass("faded");
-    hits.addClass("match").removeClass("faded");
+    hits.addClass("match labelled").removeClass("faded");
     hits.ancestors().removeClass("faded");
-    if (hits.length === 1) { cy.animate({ center: { eles: hits }, zoom: 1.4 }, { duration: 300 }); showDetails(hits[0]); }
+    if (hits.length === 1) { cy.animate({ center: { eles: hits }, zoom: z.base * 2.2 }, { duration: 300 }); showDetails(hits[0]); }
     else if (hits.length) cy.fit(hits, 60);
   }
   search.addEventListener("input", runSearch);
@@ -1177,12 +1404,37 @@ function mapView(r) {
   };
 
   const view = h("div", { class: "map-wrap" },
-    h("div", { class: "toolbar" }, search,
-      toggle("riskyOnly", "Risky only"), toggle("compact", "Group by network"), toggle("historical", "Include historical"),
+    h("div", { class: "toolbar" }, search, layoutSel,
+      toggle("riskyOnly", "Risky only"), toggle("compact", "Hide IPs"), toggle("historical", "Include historical"),
       h("button", { class: "btn btn-sm", type: "button", title: "Fit to screen", onclick: () => state.cy?.fit(undefined, 30) }, "Fit"),
-      h("button", { class: "btn btn-sm", type: "button", onclick: savePng }, icon("download"), "Save PNG")),
+      h("button", { class: "btn btn-sm", type: "button", onclick: savePng }, icon("download"), "Save PNG"),
+      fullBtn),
     note,
     h("div", { class: "map-layout" }, h("div", { class: "panel map-panel" }, graphBox), details));
+
+  // Full screen: real browser full screen when available, otherwise a full-window overlay.
+  async function setFull(on) {
+    view.classList.toggle("is-full", on);
+    fullBtn.replaceChildren(icon(on ? "shrink" : "expand"), on ? "Exit full screen" : "Full screen");
+    fullBtn.title = on ? "Exit full screen (Esc)" : "Full screen";
+    if (on && view.requestFullscreen && !document.fullscreenElement) {
+      try { await view.requestFullscreen(); } catch { /* the overlay fallback stays */ }
+    } else if (!on && document.fullscreenElement) {
+      try { await document.exitFullscreen(); } catch { /* ignore */ }
+    }
+    refit();
+  }
+  fullBtn.addEventListener("click", () => setFull(!view.classList.contains("is-full")));
+  const onFsChange = () => { if (!document.fullscreenElement && view.classList.contains("is-full")) setFull(false); };
+  const onKey = (e) => { if (e.key === "Escape" && view.classList.contains("is-full") && !document.fullscreenElement) setFull(false); };
+  document.addEventListener("fullscreenchange", onFsChange);
+  document.addEventListener("keydown", onKey);
+  state.mapCleanup = () => {
+    document.removeEventListener("fullscreenchange", onFsChange);
+    document.removeEventListener("keydown", onKey);
+    if (document.fullscreenElement === view) document.exitFullscreen().catch(() => {});
+  };
+
   setTimeout(draw, 0); // runs after the view is in the page (and, unlike rAF, also in background tabs)
   return view;
 }
