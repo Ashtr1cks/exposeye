@@ -1,6 +1,6 @@
-from domainscope.modules.asn import origin_query_name, parse_as_name, parse_origin
-from domainscope.modules.rdap import parse_rdap
-from domainscope.modules.subdomains import clean_names, is_takeover_candidate
+from exposeye.modules.asn import origin_query_name, parse_as_name, parse_origin
+from exposeye.modules.rdap import parse_rdap
+from exposeye.modules.subdomains import clean_names, is_takeover_candidate
 
 
 def test_clean_names_filters_and_dedupes():

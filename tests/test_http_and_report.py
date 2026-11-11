@@ -1,5 +1,5 @@
-from domainscope.modules.http_probe import analyze_headers, extract_title, fingerprint
-from domainscope.report import to_html, to_json, to_markdown
+from exposeye.modules.http_probe import analyze_headers, extract_title, fingerprint
+from exposeye.report import to_html, to_json, to_markdown
 
 
 def test_analyze_headers_missing_and_leaks():
@@ -35,7 +35,7 @@ def test_extract_title():
 
 SAMPLE = {
     "meta": {
-        "tool": "domainscope",
+        "tool": "exposeye",
         "version": "0.1.0",
         "domain": "example.com",
         "started": "2026-01-01T00:00:00+00:00",
@@ -86,6 +86,6 @@ def test_html_report_escapes_untrusted_data():
 
 def test_markdown_and_json_render():
     md = to_markdown(SAMPLE)
-    assert "# domainscope report: example.com" in md
+    assert "# exposeye report: example.com" in md
     assert "a\\|b" in md  # pipes escaped inside tables
     assert '"domain": "example.com"' in to_json(SAMPLE)

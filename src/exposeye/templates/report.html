@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ r.meta.domain }} · exposeye</title>
+<style>
+{% include "_report_style.css" %}
+</style>
+</head>
+<body>
+<header>
+  <h1>{{ r.meta.domain }} <span>recon report</span></h1>
+  <div class="meta">
+    {{ r.meta.started }} · {{ r.meta.duration_s }}s ·
+    {{ "passive mode" if r.meta.options.passive else "active mode (HTTP/TLS probing)" }} ·
+    exposeye {{ r.meta.version }}
+  </div>
+</header>
+<nav><div>
+  <a href="#findings">Findings</a><a href="#whois">Registration</a><a href="#dns">DNS</a>
+  {% if r.email %}<a href="#email">Email</a>{% endif %}<a href="#hosts">Hosts</a>{% if r.exposure %}<a href="#exposure">Ports &amp; CVEs</a>{% endif %}
+  {% if r.http %}<a href="#http">HTTP</a>{% endif %}{% if r.tls %}<a href="#tls">TLS</a>{% endif %}
+</div></nav>
+<main>
+
+<div class="cards">
+  {% for s in severities %}
+  <div class="card {{ s }}"><div class="n">{{ r.summary.findings[s] }}</div><div class="l">{{ s }}</div></div>
+  {% endfor %}
+  <div class="card"><div class="n">{{ r.summary.hosts_live }}<span class="muted" style="font-size:15px">/{{ r.summary.hosts_total }}</span></div><div class="l">hosts live</div></div>
+  <div class="card"><div class="n">{{ r.summary.unique_ips }}</div><div class="l">unique IPs</div></div>
+  <div class="card"><div class="n">{{ r.summary.networks }}</div><div class="l">networks (ASN)</div></div>
+</div>
+
+<section id="findings">
+  <h2>Findings</h2>
+  {% if r.findings %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Severity</th><th>Module</th><th>Finding</th><th>Detail</th></tr></thead>
+    <tbody>
+    {% for f in r.findings %}
+      <tr><td><span class="sev {{ f.severity }}">{{ f.severity }}</span></td><td class="muted">{{ f.module }}</td>
+          <td>{{ f.title }}</td><td class="mono">{{ f.detail }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<p class="ok">No findings.</p>{% endif %}
+  {% if r.errors %}
+  <p class="muted" style="margin-top:14px">Some modules reported errors:</p>
+  <ul>{% for m, e in r.errors.items() %}<li><strong>{{ m }}</strong>: <span class="mono">{{ e }}</span></li>{% endfor %}</ul>
+  {% endif %}
+</section>
+
+<section id="whois">
+  <h2>Registration (RDAP)</h2>
+  {% if r.rdap %}
+  <dl>
+    <dt>Registrar</dt><dd>{{ r.rdap.registrar or "-" }}</dd>
+    <dt>Registrant</dt><dd>{{ r.rdap.registrant or "redacted / not published" }}</dd>
+    <dt>Created</dt><dd>{{ r.rdap.created or "-" }}{% if r.rdap.age_days is not none %} <span class="muted">({{ r.rdap.age_days }} days ago)</span>{% endif %}</dd>
+    <dt>Updated</dt><dd>{{ r.rdap.updated or "-" }}</dd>
+    <dt>Expires</dt><dd>{{ r.rdap.expires or "-" }}{% if r.rdap.days_to_expiry is not none %} <span class="muted">(in {{ r.rdap.days_to_expiry }} days)</span>{% endif %}</dd>
+    <dt>Status</dt><dd>{% for s in r.rdap.status %}<span class="tag">{{ s }}</span>{% else %}-{% endfor %}</dd>
+    <dt>Name servers</dt><dd class="mono">{{ r.rdap.nameservers|join(", ") or "-" }}</dd>
+    <dt>DNSSEC (registry)</dt><dd>{{ "signed" if r.rdap.dnssec_signed else "unsigned" if r.rdap.dnssec_signed is not none else "-" }}</dd>
+    <dt>Abuse contact</dt><dd>{{ r.rdap.abuse_email or "-" }}</dd>
+  </dl>
+  {% else %}<p class="muted">RDAP data not available.</p>{% endif %}
+</section>
+
+<section id="dns">
+  <h2>DNS records</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th style="width:80px">Type</th><th>Values</th></tr></thead>
+    <tbody>
+    {% for rtype, values in r.dns.records.items() if values %}
+      <tr><td><strong>{{ rtype }}</strong></td><td>{% for v in values %}<div><code>{{ v }}</code></div>{% endfor %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p>DNSSEC: <strong class="{{ 'ok' if r.dns.dnssec else 'muted' }}">{{ "enabled" if r.dns.dnssec else "not enabled" }}</strong>
+  {% if r.dns.wildcard_ips %} · Wildcard DNS → <code>{{ r.dns.wildcard_ips|join(", ") }}</code>{% endif %}</p>
+</section>
+
+{% if r.email %}
+<section id="email">
+  <h2>Email security</h2>
+  <dl>
+    <dt>MX present</dt><dd>{{ "yes" if r.email.has_mx else "no" }}</dd>
+    <dt>SPF</dt><dd>{% if r.email.spf %}<code>{{ r.email.spf.record }}</code>
+      <div class="muted">all qualifier: {{ r.email.spf.all or "none" }} · top-level lookups: {{ r.email.spf.lookup_count }}</div>
+      {% else %}<span class="bad">missing</span>{% endif %}</dd>
+    <dt>DMARC</dt><dd>{% if r.email.dmarc %}<code>{{ r.email.dmarc.record }}</code>
+      <div class="muted">policy: {{ r.email.dmarc.policy }}{% if r.email.dmarc.subdomain_policy %} · subdomains: {{ r.email.dmarc.subdomain_policy }}{% endif %} · pct: {{ r.email.dmarc.pct }}</div>
+      {% else %}<span class="bad">missing</span>{% endif %}</dd>
+    <dt>MTA-STS</dt><dd class="{{ 'ok' if r.email.mta_sts else 'muted' }}">{{ "yes" if r.email.mta_sts else "no" }}</dd>
+    <dt>TLS-RPT</dt><dd class="{{ 'ok' if r.email.tls_rpt else 'muted' }}">{{ "yes" if r.email.tls_rpt else "no" }}</dd>
+  </dl>
+</section>
+{% endif %}
+
+<section id="hosts">
+  <h2>Hosts ({{ r.hosts|length }})</h2>
+  {% if r.subdomain_sources %}
+  <p class="muted">Sources:
+    {% for s, n in r.subdomain_sources.counts.items() %}<span class="tag">{{ s }}: {{ n }}</span>{% endfor %}
+    {% for s, e in r.subdomain_sources.errors.items() %}<span class="tag warn" title="{{ e }}">{{ s }}: failed</span>{% endfor %}
+  </p>
+  {% endif %}
+  <input class="filter" id="hostFilter" type="search" placeholder="Filter hosts…" aria-label="Filter hosts">
+  <div class="table-wrap"><table id="hostTable">
+    <thead><tr><th>Host</th><th>IPs</th><th>CNAME</th><th>Network</th><th>Notes</th></tr></thead>
+    <tbody>
+    {% for h in r.hosts %}
+      <tr>
+        <td class="mono">{{ h.name }}</td>
+        <td class="mono">{% if h.ips %}{{ h.ips|join(", ") }}{% else %}<span class="muted">unresolved</span>{% endif %}</td>
+        <td class="mono">{{ h.cname or "" }}</td>
+        <td>{{ h.asn|join(", ") }}</td>
+        <td>
+          {% if h.dangling %}<span class="tag warn">dangling CNAME</span>{% endif %}
+          {% if h.wildcard %}<span class="tag">wildcard</span>{% endif %}
+          {% if h.interesting %}<span class="tag note">interesting</span>{% endif %}
+          {% if not h.from_ct %}<span class="tag">guessed</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+{% if r.exposure %}
+<section id="exposure">
+  <h2>Open ports &amp; vulnerabilities</h2>
+  <p class="muted">Passive data from Shodan InternetDB (weekly internet scans). CVEs are inferred from software versions; verify before acting. KEV = CISA Known Exploited Vulnerabilities, EPSS = exploit probability (30 days).</p>
+  {% if r.exposure.ips %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>IP</th><th>Open ports</th><th>Vulnerabilities</th><th>Tags</th></tr></thead>
+    <tbody>
+    {% for ip, info in r.exposure.ips|dictsort %}
+      <tr>
+        <td class="mono">{{ ip }}</td>
+        <td>{% for p in info.ports %}<span class="tag">{{ p }}</span>{% else %}-{% endfor %}</td>
+        <td>{% for c in info.vulns %}{% set m = r.exposure.cves.get(c, {}) %}<span class="tag{% if m.kev %} warn{% endif %}">{{ c }}{% if m.kev %} (KEV){% endif %}{% if m.epss is not none and m.epss is defined %} {{ "%.0f"|format(m.epss * 100) }}%{% endif %}</span>{% else %}-{% endfor %}</td>
+        <td>{{ info.tags|join(", ") }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<p class="muted">No Shodan data for these IPs.</p>{% endif %}
+</section>
+{% endif %}
+
+{% if r.http %}
+<section id="http">
+  <h2>HTTP</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Host</th><th>Status</th><th>Title</th><th>Server / tech</th><th>Missing security headers</th></tr></thead>
+    <tbody>
+    {% for p in r.http %}
+      {% if p.reachable %}
+      <tr>
+        <td class="mono"><a href="{{ p.final_url }}" rel="noopener noreferrer">{{ p.host }}</a>
+          {% if p.final_url and p.final_url.rstrip("/") != p.url.rstrip("/") %}<div class="muted">→ {{ p.final_url }}</div>{% endif %}</td>
+        <td>{{ p.status }}</td>
+        <td>{{ p.title or "" }}</td>
+        <td>{% if p.server %}<code>{{ p.server }}</code> {% endif %}{% for t in p.tech %}<span class="tag">{{ t }}</span>{% endfor %}</td>
+        <td>{% for m in p.headers.missing %}<span class="tag {{ 'note' if m.severity == 'low' else '' }}">{{ m.header }}</span>{% else %}<span class="ok">none</span>{% endfor %}</td>
+      </tr>
+      {% else %}
+      <tr><td class="mono">{{ p.host }}</td><td colspan="4" class="muted">unreachable: {{ p.errors|join("; ") }}</td></tr>
+      {% endif %}
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endif %}
+
+{% if r.tls %}
+<section id="tls">
+  <h2>TLS certificates</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Host</th><th>Valid</th><th>Issuer</th><th>Expires</th><th>Protocol</th><th>SANs</th></tr></thead>
+    <tbody>
+    {% for t in r.tls %}
+      <tr>
+        <td class="mono">{{ t.host }}</td>
+        <td>{% if t.valid %}<span class="ok">yes</span>{% else %}<span class="bad">no</span><div class="muted">{{ t.error }}</div>{% endif %}</td>
+        <td>{{ t.issuer or "" }}</td>
+        <td>{% if t.not_after %}{{ t.not_after[:10] }} <span class="muted">({{ t.days_left }}d)</span>{% endif %}</td>
+        <td>{{ t.protocol or "" }}</td>
+        <td class="mono">{{ (t.san or [])[:6]|join(", ") }}{% if (t.san or [])|length > 6 %} <span class="muted">+{{ t.san|length - 6 }}</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endif %}
+
+</main>
+<footer>Generated by exposeye {{ r.meta.version }}. Only assess domains you are authorised to test.</footer>
+<script>
+  (function () {
+    var input = document.getElementById("hostFilter");
+    if (!input) return;
+    var rows = document.querySelectorAll("#hostTable tbody tr");
+    input.addEventListener("input", function () {
+      var q = input.value.toLowerCase();
+      rows.forEach(function (row) {
+        row.style.display = row.textContent.toLowerCase().indexOf(q) === -1 ? "none" : "";
+      });
+    });
+  })();
+</script>
+</body>
+</html>

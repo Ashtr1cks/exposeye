@@ -4,7 +4,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from domainscope.web.server import create_app
+from exposeye.web.server import create_app
 
 
 def fake_scan(domain, opts, progress):
@@ -61,7 +61,7 @@ def read_events(client, scan_id):
 
 
 def test_index_and_static(client):
-    assert "domainscope" in client.get("/").text
+    assert "exposeye" in client.get("/").text
     assert client.get("/static/app.js").status_code == 200
 
 
@@ -90,7 +90,7 @@ def test_full_scan_lifecycle(client):
     html = client.get(f"/api/scans/{scan_id}/report/html?download=true")
     assert html.status_code == 200
     assert "attachment" in html.headers["content-disposition"]
-    assert client.get(f"/api/scans/{scan_id}/report/md").text.startswith("# domainscope report")
+    assert client.get(f"/api/scans/{scan_id}/report/md").text.startswith("# exposeye report")
     assert client.get(f"/api/scans/{scan_id}/report/exe").status_code == 404
 
     # reconnecting to a finished scan replays and ends with "done"

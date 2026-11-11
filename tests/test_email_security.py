@@ -1,4 +1,4 @@
-from domainscope.modules.email_security import findings, parse_dmarc, parse_spf
+from exposeye.modules.email_security import findings, parse_dmarc, parse_spf
 
 
 def titles(email):

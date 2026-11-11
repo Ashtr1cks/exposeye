@@ -5,13 +5,13 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from domainscope.monitor import task
-from domainscope.monitor.diff import diff, is_alert
-from domainscope.monitor.notify import valid_discord_webhook
-from domainscope.monitor.runner import Monitor, summarise
-from domainscope.monitor.watchlist import INTERVALS, SLACK, ChangeLog, Watchlist
-from domainscope.storage import FileLock, Store
-from domainscope.web.server import create_app
+from exposeye.monitor import task
+from exposeye.monitor.diff import diff, is_alert
+from exposeye.monitor.notify import valid_discord_webhook
+from exposeye.monitor.runner import Monitor, summarise
+from exposeye.monitor.watchlist import INTERVALS, SLACK, ChangeLog, Watchlist
+from exposeye.storage import FileLock, Store
+from exposeye.web.server import create_app
 
 
 def host(name, ips, **kw):
@@ -330,9 +330,7 @@ def test_discord_webhook_validation():
 
 def test_task_command_uses_module_and_data_dir(tmp_path):
     cmd = task.command(tmp_path)
-    assert (
-        "-m domainscope.watch_cli" in cmd and str(tmp_path) in cmd and cmd.endswith("run --quiet")
-    )
+    assert "-m exposeye.watch_cli" in cmd and str(tmp_path) in cmd and cmd.endswith("run --quiet")
 
 
 # ---------------------------------------------------------------- API

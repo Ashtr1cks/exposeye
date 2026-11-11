@@ -1,8 +1,8 @@
 import copy
 
-from domainscope.modules import exposure
-from domainscope.monitor.diff import diff
-from domainscope.report import to_html, to_markdown
+from exposeye.modules import exposure
+from exposeye.monitor.diff import diff
+from exposeye.report import to_html, to_markdown
 
 
 class FakeResp:
@@ -184,7 +184,7 @@ def test_reports_include_exposure():
     exp = _exp([3389], ["CVE-2021-40438"], {"CVE-2021-40438": {"kev": True, "epss": 0.97}})
     result = {
         "meta": {
-            "tool": "domainscope",
+            "tool": "exposeye",
             "version": "t",
             "domain": "example.com",
             "started": "2026-01-01T00:00:00+00:00",

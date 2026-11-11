@@ -1,6 +1,6 @@
 import pytest
 
-from domainscope.utils import normalize_domain
+from exposeye.utils import normalize_domain
 
 
 @pytest.mark.parametrize(

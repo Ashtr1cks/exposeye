@@ -3,14 +3,14 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from domainscope.emailcheck import _breach_findings, advice
-from domainscope.modules.breaches import normalise_hibp, normalise_xon
-from domainscope.modules.email_identity import gravatar_hash, provider_type
-from domainscope.modules.passwords import count_in_range, split_hash
-from domainscope.report import report_name, to_html, to_markdown
-from domainscope.settings import Settings, mask
-from domainscope.utils import normalize_email
-from domainscope.web.server import create_app
+from exposeye.emailcheck import _breach_findings, advice
+from exposeye.modules.breaches import normalise_hibp, normalise_xon
+from exposeye.modules.email_identity import gravatar_hash, provider_type
+from exposeye.modules.passwords import count_in_range, split_hash
+from exposeye.report import report_name, to_html, to_markdown
+from exposeye.settings import Settings, mask
+from exposeye.utils import normalize_email
+from exposeye.web.server import create_app
 
 # ---------------------------------------------------------------- normalisation
 
@@ -183,7 +183,7 @@ def test_email_reports_render_and_escape():
     assert "you@example.com" in html and "LinkedIn" in html
     assert "<script>x</script>" not in html
     md = to_markdown(EMAIL_RESULT)
-    assert md.startswith("# domainscope email report: you@example.com")
+    assert md.startswith("# exposeye email report: you@example.com")
     assert "| LinkedIn | 2012 | easytocrack |" in md
     assert report_name(EMAIL_RESULT) == "you_at_example.com"
 

@@ -2,35 +2,35 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "domainscope: open the app",
+      "name": "exposeye: open the app",
       "type": "debugpy",
       "request": "launch",
-      "module": "domainscope.app",
+      "module": "exposeye.app",
       "console": "integratedTerminal",
       "justMyCode": true
     },
     {
-      "name": "domainscope: app in browser",
+      "name": "exposeye: app in browser",
       "type": "debugpy",
       "request": "launch",
-      "module": "domainscope.app",
+      "module": "exposeye.app",
       "args": ["--browser"],
       "console": "integratedTerminal"
     },
     {
-      "name": "domainscope CLI: scan a domain",
+      "name": "exposeye CLI: scan a domain",
       "type": "debugpy",
       "request": "launch",
-      "module": "domainscope",
+      "module": "exposeye",
       "args": ["${input:domain}", "--open"],
       "console": "integratedTerminal",
       "justMyCode": true
     },
     {
-      "name": "domainscope CLI: passive scan",
+      "name": "exposeye CLI: passive scan",
       "type": "debugpy",
       "request": "launch",
-      "module": "domainscope",
+      "module": "exposeye",
       "args": ["${input:domain}", "--passive", "--open"],
       "console": "integratedTerminal"
     }

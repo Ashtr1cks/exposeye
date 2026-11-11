@@ -1,17 +1,26 @@
-# domainscope
+# exposeye
 
-[![CI](https://github.com/Ashtr1cks/domainscope/actions/workflows/ci.yml/badge.svg)](https://github.com/Ashtr1cks/domainscope/actions/workflows/ci.yml)
+[![CI](https://github.com/Ashtr1cks/exposeye/actions/workflows/ci.yml/badge.svg)](https://github.com/Ashtr1cks/exposeye/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-**Passive-first domain reconnaissance (OSINT): a desktop app and a CLI.** Point it at a domain
-and get registration data, DNS and email-security posture, subdomains from Certificate
-Transparency logs, hosting/ASN mapping, and (optionally) HTTP/TLS checks, with every finding
-explained in plain English. Export any scan as HTML, Markdown or JSON.
+**See what you expose: a passive-first OSINT toolkit, as a desktop app and a CLI.**
 
-No API keys, no accounts, and nothing to configure.
+- **Domains:** registration, DNS and email-security posture, subdomains from Certificate
+  Transparency logs, hosting, and optional HTTP/TLS checks.
+- **Open ports & CVEs:** exposed services and known vulnerabilities on every IP, ranked by real
+  exploitation (CISA KEV) and exploit probability (EPSS).
+- **Emails:** which data breaches include an address, and whether passwords leaked. Plus a
+  private password-leak check.
+- **Monitoring:** re-checks on a schedule and alerts you when something changes for the worse.
 
-![domainscope results view](docs/app-results.png)
+Every finding is explained in plain English, and any scan can be exported as HTML, Markdown or
+JSON. No API keys, no accounts, and nothing to configure.
+
+> Formerly **domainscope**. Old links redirect, and existing scan history moves to
+> `~/.exposeye` automatically on first run.
+
+![exposeye results view](docs/app-results.png)
 
 ## The app
 
@@ -31,12 +40,12 @@ Pick what you want to find out, type a domain, and press **Run scan**. No comman
 
 Results show a one-line verdict, severity counts, and tabs for findings, hosts, DNS, email,
 websites and registration. Each finding has a **What does this mean?** explanation. Scans are
-saved to `~/.domainscope` so your history persists, and the app shows the equivalent CLI command
+saved to `~/.exposeye` so your history persists, and the app shows the equivalent CLI command
 for every scan so you can script it later.
 
 <details><summary>Screenshot: new scan form</summary>
 
-![domainscope new scan form](docs/app-new-scan.png)
+![exposeye new scan form](docs/app-new-scan.png)
 </details>
 
 ### Email exposure check
@@ -59,20 +68,20 @@ or set `HIBP_API_KEY` to use HIBP instead.
 first 5 hex characters are sent to the
 [Pwned Passwords range API](https://haveibeenpwned.com/API/v3#PwnedPasswords). The API returns
 every leaked hash with that prefix, padded with decoys, and the match happens locally
-(k-anonymity). The password never reaches domainscope's own server, disk or history.
+(k-anonymity). The password never reaches exposeye's own server, disk or history.
 
-By design, domainscope never retrieves actual leaked passwords, and it doesn't probe sign-up or
+By design, exposeye never retrieves actual leaked passwords, and it doesn't probe sign-up or
 reset pages to enumerate accounts. Check your own address, or someone else's with their consent.
 
 <details><summary>Screenshot: email exposure results</summary>
 
-![domainscope email results](docs/app-email.png)
+![exposeye email results](docs/app-email.png)
 </details>
 
 **Start it:**
 
-- **Windows:** double-click **`Start domainscope.cmd`**. The first run sets everything up.
-- **Any OS:** `pip install -e ".[desktop]"` then run `domainscope-app`
+- **Windows:** double-click **`Start exposeye.cmd`**. The first run sets everything up.
+- **Any OS:** `pip install -e ".[desktop]"` then run `exposeye-app`
 
 It opens in its own window (via [pywebview](https://pywebview.flowrl.com/)), or in your browser
 if pywebview isn't installed or you pass `--browser`. The server only listens on `127.0.0.1` and
@@ -80,9 +89,9 @@ rejects requests with any other `Host` header, which blocks DNS-rebinding attack
 
 ## Open ports & vulnerabilities
 
-For every IP the scan finds, domainscope asks [Shodan InternetDB](https://internetdb.shodan.io/)
+For every IP the scan finds, exposeye asks [Shodan InternetDB](https://internetdb.shodan.io/)
 what Shodan's own internet-wide scans saw there: open ports, detected software, tags and CVE IDs.
-This is passive, so domainscope never connects to the hosts, and it works in Quiet look mode. CVEs
+This is passive, so exposeye never connects to the hosts, and it works in Quiet look mode. CVEs
 are then ranked so the urgent ones stand out:
 
 - **CISA KEV:** CVEs being exploited in real attacks (and whether ransomware groups use them).
@@ -103,7 +112,7 @@ Monitoring alerts when a risky port opens or a new known-exploited CVE appears.
 ## Monitoring
 
 A single scan is a snapshot; monitoring tells you **what changed**. Add domains you own (and
-your own email addresses) to the watchlist, and domainscope re-checks them daily or weekly. Each
+your own email addresses) to the watchlist, and exposeye re-checks them daily or weekly. Each
 new scan is compared with the previous one, changes are recorded in a timeline, and you're
 alerted when something gets worse.
 
@@ -127,7 +136,7 @@ phone too.
 **When checks run:**
 - **While the app is open:** due items are checked automatically every minute.
 - **In the background (Windows):** one click on the Monitoring page registers an hourly Task
-  Scheduler job. It runs `domainscope-watch run --quiet` with `pythonw` (no window) and only
+  Scheduler job. It runs `exposeye-watch run --quiet` with `pythonw` (no window) and only
   scans items that are due, so it catches up after the PC was off. On macOS/Linux, put the same
   command in cron.
 
@@ -135,17 +144,17 @@ Any result page also has **What changed** (compare with the previous scan of the
 and **Watch** (start monitoring, using that scan as the baseline).
 
 ```bash
-domainscope-watch add example.com --weekly --full
-domainscope-watch add me@example.com
-domainscope-watch run            # scan whatever is due
-domainscope-watch changes        # recent change timeline
-domainscope-watch install-task   # hourly background checks (Windows)
+exposeye-watch add example.com --weekly --full
+exposeye-watch add me@example.com
+exposeye-watch run            # scan whatever is due
+exposeye-watch changes        # recent change timeline
+exposeye-watch install-task   # hourly background checks (Windows)
 ```
 
 ## The CLI
 
 ```text
-$ domainscope example.com --open
+$ exposeye example.com --open
 [+] WHOIS ........ RESERVED-Internet Assigned Numbers Authority, created 1995-08-14
 [+] DNS .......... A:6, AAAA:6, MX:1, NS:2, TXT:2, SOA:1
 [!] Email sec .... SPF -all, DMARC p=reject
@@ -180,8 +189,8 @@ record, dangling CNAMEs to takeover-prone providers, expiring certificates, miss
 Requires Python 3.10+.
 
 ```bash
-git clone https://github.com/Ashtr1cks/domainscope.git
-cd domainscope
+git clone https://github.com/Ashtr1cks/exposeye.git
+cd exposeye
 python -m venv .venv
 # Windows:  .venv\Scripts\activate
 # Linux/macOS: source .venv/bin/activate
@@ -193,12 +202,12 @@ Or install it as a global CLI with [pipx](https://pipx.pypa.io/): `pipx install 
 ## Usage
 
 ```bash
-domainscope example.com                    # full scan, all report formats into ./reports
-domainscope example.com --passive --open   # no direct contact with target; open HTML when done
-domainscope https://shop.example.com/x     # URLs are fine, it extracts the host
-domainscope a.com b.org -f json -o out/    # several domains, JSON only
-domainscope example.com --resolver 1.1.1.1 --probe-limit 50
-python -m domainscope --help               # works without the console script too
+exposeye example.com                    # full scan, all report formats into ./reports
+exposeye example.com --passive --open   # no direct contact with target; open HTML when done
+exposeye https://shop.example.com/x     # URLs are fine, it extracts the host
+exposeye a.com b.org -f json -o out/    # several domains, JSON only
+exposeye example.com --resolver 1.1.1.1 --probe-limit 50
+python -m exposeye --help               # works without the console script too
 ```
 
 | Option | Default | Description |
@@ -224,15 +233,15 @@ The JSON report has a stable structure (`meta`, `rdap`, `dns`, `email`, `hosts`,
 ### Email checks from the terminal
 
 ```bash
-domainscope-email you@example.com --open     # breach report (HTML/MD/JSON)
-domainscope-email --password                  # hidden prompt, k-anonymity check
-domainscope-email you@example.com --hibp-key KEY
+exposeye-email you@example.com --open     # breach report (HTML/MD/JSON)
+exposeye-email --password                  # hidden prompt, k-anonymity check
+exposeye-email you@example.com --hibp-key KEY
 ```
 
 ## Project layout
 
 ```text
-src/domainscope/
+src/exposeye/
 ├── app.py              # desktop launcher (pywebview window or browser)
 ├── web/
 │   ├── server.py       # FastAPI API: background scans, SSE progress, history
@@ -242,7 +251,7 @@ src/domainscope/
 ├── scanner.py          # domain scan: runs modules, aggregates findings
 ├── emailcheck.py       # email check: breaches, domain, profile, advice
 ├── watch_cli.py        # monitoring CLI (used by the scheduled task)
-├── settings.py         # ~/.domainscope/settings.json (HIBP key, alert settings)
+├── settings.py         # ~/.exposeye/settings.json (HIBP key, alert settings)
 ├── storage.py          # scan history + cross-process file lock
 ├── monitor/
 │   ├── diff.py         # "what changed" engine (domain + email)
