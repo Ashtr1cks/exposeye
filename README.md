@@ -1,4 +1,4 @@
-# exposeye
+<h1><img src="docs/logo.svg" width="40" alt="" align="center"> exposeye</h1>
 
 [![CI](https://github.com/Ashtr1cks/exposeye/actions/workflows/ci.yml/badge.svg)](https://github.com/Ashtr1cks/exposeye/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
