@@ -908,7 +908,7 @@ function exposureView(r) {
 const MEDIUM_PORTS = new Set([21, 135, 161, 389, 5601, 5985, 5986]);
 const RISK_RANK = { none: 0, low: 1, medium: 2, high: 3 };
 const worse = (a, b) => (RISK_RANK[b] > RISK_RANK[a] ? b : a);
-const MAP_MIN_HOSTS = 5;
+const MAP_MIN_HOSTS = 1; // even a small map shows how hosts, IPs and providers connect
 const MAP_MAX_HOSTS = 300;
 
 let cytoscapeLoading = null;

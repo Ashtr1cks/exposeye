@@ -171,7 +171,7 @@ helpers.
 
 ## Association map
 
-Scans with 5 or more live hosts get a **Map** tab: an interactive graph linking the domain to its
+Every domain scan gets a **Map** tab: an interactive graph linking the domain to its
 subdomains, their IP addresses, the hosting networks behind them, and outside services they point
 to via CNAME. It surfaces patterns a table hides:
 
@@ -203,7 +203,7 @@ offline and never loads code from the internet.
 
 ![Association map (demo data)](docs/app-map.png)
 
-*Screenshot uses fictional demo data with documentation-only IP addresses.*
+*Screenshot uses a fictional demo company (`acme.example`) with documentation-only IP addresses.*
 
 ## Monitoring
 
