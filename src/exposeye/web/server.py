@@ -161,6 +161,19 @@ class DecodeRequest(BaseModel):
     xor: bool = True
 
 
+class HashRequest(BaseModel):
+    hashes: list[str] = Field(..., max_length=200)
+    wordlist: str | None = Field(None, max_length=1000)
+    extra_words: str | None = Field(None, max_length=200_000)
+
+
+class JwtRequest(BaseModel):
+    token: str = Field(..., max_length=20_000)
+    wordlist: str | None = Field(None, max_length=1000)
+    forge_payload: str | None = Field(None, max_length=20_000)
+    resign_secret: str | None = Field(None, max_length=1000)
+
+
 class WatchAdd(BaseModel):
     target: str = Field(..., max_length=500)
     interval: str = "daily"
@@ -311,6 +324,76 @@ def create_app(
     @app.post("/api/lab/decode")
     def lab_decode(req: DecodeRequest):
         return lab_decoder.decode(req.input, hunter(), req.depth, req.caesar, req.xor)
+
+    def _wordsource(wordlist: str | None, extra: str | None = None):
+        """Validate the wordlist path up front, then return a factory of fresh word iterators."""
+        from exposeye.lab.hashes import BUILTIN_WORDS, iter_wordlist
+
+        path = None
+        if wordlist:
+            path = Path(wordlist)
+            if not path.is_file():  # checked before any work so a bad path always 400s
+                raise HTTPException(400, f"Wordlist not found: {wordlist}")
+
+        def make():
+            yield from BUILTIN_WORDS
+            if extra:
+                for line in extra.splitlines():
+                    if line.strip():
+                        yield line.rstrip("\r\n")
+            if path is not None:
+                yield from iter_wordlist(path)
+
+        return make
+
+    @app.post("/api/lab/hash")
+    def lab_hash(req: HashRequest):
+        from exposeye.lab import hashes as lab_hashes
+
+        words = _wordsource(req.wordlist, req.extra_words)  # validates the path (400 if missing)
+        out = []
+        for raw in req.hashes[:200]:
+            value = raw.strip()
+            if not value:
+                continue
+            types = lab_hashes.identify(value)
+            entry = {
+                "hash": value,
+                "types": [
+                    {
+                        "name": t.name,
+                        "note": t.note,
+                        "crackable": lab_hashes.verifier(t) is not None,
+                    }
+                    for t in types
+                ],
+            }
+            if lab_hashes.crackable(value):
+                entry["result"] = lab_hashes.crack(value, words())
+            out.append(entry)
+        return {"results": out}
+
+    @app.post("/api/lab/jwt")
+    def lab_jwt(req: JwtRequest):
+        from exposeye.lab import jwt_tools
+
+        words = _wordsource(req.wordlist)  # validates the path (400 if missing)
+        info = jwt_tools.decode(req.token)
+        if info["valid"]:
+            if info["alg"] in jwt_tools.HS:
+                info["secret_search"] = jwt_tools.find_secret(req.token, words())
+            else:
+                info["secret_search"] = None
+            if req.forge_payload:
+                import json as _json
+
+                try:
+                    info["forged_none"] = jwt_tools.forge_none(_json.loads(req.forge_payload))
+                except (ValueError, TypeError) as exc:
+                    raise HTTPException(400, f"Payload is not valid JSON: {exc}") from exc
+            if req.resign_secret:
+                info["resigned"] = jwt_tools.resign(req.token, req.resign_secret)
+        return info
 
     @app.post("/api/lab/files")
     async def lab_analyse(request: Request, name: str = "upload"):

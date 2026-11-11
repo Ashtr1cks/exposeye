@@ -295,6 +295,8 @@ function drawHistory() {
   document.getElementById("monitorLink").classList.toggle("active", location.hash === "#/monitor");
   document.getElementById("decoderLink").classList.toggle("active", location.hash === "#/lab/decode");
   document.getElementById("fileLink").classList.toggle("active", location.hash === "#/lab/file");
+  document.getElementById("hashLink").classList.toggle("active", location.hash === "#/lab/hash");
+  document.getElementById("jwtLink").classList.toggle("active", location.hash === "#/lab/jwt");
 }
 
 async function refreshBadge() {
@@ -319,6 +321,8 @@ function route() {
   else if (view === "monitor") showMonitor();
   else if (view === "lab" && id === "decode") showDecoder();
   else if (view === "lab" && id === "file") showFileLab();
+  else if (view === "lab" && id === "hash") showHashes();
+  else if (view === "lab" && id === "jwt") showJwt();
   else if (view === "settings") showSettings();
   else showNew();
   drawHistory();
@@ -2099,6 +2103,7 @@ function fileReport(r) {
     ["meta", "Metadata", null],
     r.lsb || r.text_stego?.length ? ["stego", "Steganography", null] : null,
     r.audio ? ["audio", "Audio", null] : null,
+    r.pcap && !r.pcap.error ? ["network", "Network", r.pcap.credentials.length || null] : null,
     ["hex", "Hex", null],
   ].filter(Boolean);
   const t = tabbed("file", tabs, {
@@ -2108,6 +2113,7 @@ function fileReport(r) {
     meta: () => fileMeta(r),
     stego: () => fileStego(r),
     audio: () => fileAudio(r),
+    network: () => fileNetwork(r),
     hex: () => h("div", { class: "panel" }, h("pre", { class: "hexdump" }, r.hexdump || "(empty)"),
       h("p", { class: "muted" }, "First 512 bytes.")),
   });
@@ -2384,6 +2390,207 @@ function fileAudio(r) {
     h("div", { class: "panel" }, h("h3", {}, "Sample LSB extraction"),
       h("p", { class: "muted" }, "The lowest bits of the audio samples, which are inaudible, packed into bytes."),
       lsbTable(a.lsb)));
+}
+
+/* ---- hashes ---- */
+
+async function showHashes() {
+  const s = await labSettings();
+  const input = h("textarea", { class: "lab-input mono", rows: "5", spellcheck: "false", "aria-label": "Hashes, one per line",
+    placeholder: "Paste one or more hashes, one per line:\n5f4dcc3b5aa765d61d8327deb882cf99\n$2b$12$..." });
+  input.value = store.get("ds.hash.input", "");
+  const wordlist = h("input", { type: "text", class: "domain-input", placeholder: "Optional: path to a wordlist, e.g. C:\\wordlists\\rockyou.txt", spellcheck: "false", "aria-label": "Wordlist path" });
+  wordlist.value = store.get("ds.hash.wordlist", "");
+  const extra = h("textarea", { class: "lab-input mono", rows: "2", spellcheck: "false", "aria-label": "Extra words to try",
+    placeholder: "Optional: extra candidate passwords, one per line" });
+  const out = h("div", { class: "lab-results" });
+  const err = h("div", { class: "form-error", role: "alert" });
+  const run = h("button", { class: "btn btn-primary", type: "submit" }, icon("play"), "Identify & crack");
+
+  async function go() {
+    const list = input.value.split("\n").map((x) => x.trim()).filter(Boolean);
+    if (!list.length) { err.textContent = "Paste at least one hash."; return; }
+    err.textContent = "";
+    store.set("ds.hash.input", input.value.slice(0, 20000));
+    store.set("ds.hash.wordlist", wordlist.value);
+    run.disabled = true;
+    out.replaceChildren(h("div", { class: "empty" }, h("span", { class: "spinner", style: "display:inline-block" }), h("div", {}, "Cracking…")));
+    try {
+      const r = await api.post("/api/lab/hash", { hashes: list, wordlist: wordlist.value.trim() || null, extra_words: extra.value || null });
+      out.replaceChildren(...r.results.map(hashCard));
+    } catch (ex) { out.replaceChildren(); err.textContent = ex.message; }
+    run.disabled = false;
+  }
+
+  function hashCard(e) {
+    const res = e.result;
+    const cracked = res && res.found;
+    return h("article", { class: `lab-card ${cracked ? "has-flag" : ""}` },
+      h("div", { class: "lab-card-head" }, h("code", { class: "mono", style: "word-break:break-all" }, e.hash),
+        cracked ? h("span", { class: "score", style: "color:var(--ok);font-weight:700" }, "cracked") : null),
+      h("div", {}, "Likely type: ", e.types.length
+        ? e.types.map((t) => h("span", { class: `tag ${t.crackable ? "" : "note"}`, title: t.note || "" }, t.name))
+        : h("span", { class: "muted" }, "unknown")),
+      cracked
+        ? h("div", { class: "flag-row" }, h("span", { class: "flag-value" }, res.found.password),
+            h("span", { class: "muted" }, `${res.found.type}, ${res.tried.toLocaleString()} tried`),
+            h("button", { class: "btn btn-sm btn-ghost", type: "button", onclick: () => copyText(res.found.password) }, icon("copy"), "Copy"))
+        : res
+          ? h("div", { class: "muted" }, res.exhausted ? `Not in the wordlist (${res.tried.toLocaleString()} tried). Try a bigger list like rockyou.txt.` : `Gave up after ${res.tried.toLocaleString()} words.`)
+          : h("div", { class: "notice" }, "Salted or slow hash: can't be cracked by simple lookup. Use john or hashcat with this hash."));
+  }
+
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); go(); } });
+  const form = h("form", { class: "panel", onsubmit: (e) => { e.preventDefault(); go(); } },
+    input,
+    h("details", { class: "options", style: "margin:12px 0" }, h("summary", {}, icon("sliders"), "Wordlist (optional)"),
+      h("div", { class: "options-body" },
+        h("div", { class: "toggle-text" }, h("strong", {}, "Wordlist file"), h("span", {}, "A big list finds more. rockyou.txt is the classic.")),
+        wordlist,
+        h("div", { class: "toggle-text", style: "margin-top:10px" }, h("strong", {}, "Extra words"), h("span", {}, "Words from the challenge itself often work.")),
+        extra)),
+    h("div", { class: "lab-controls" }, run,
+      h("button", { class: "btn btn-ghost", type: "button", onclick: () => { input.value = "5f4dcc3b5aa765d61d8327deb882cf99"; go(); } }, "Try an example")),
+    h("div", { class: "muted lab-tip" }, "Only weak/known passwords are found - the standard CTF hash-cracking workflow. Everything runs on this PC."),
+    err);
+
+  render(h("section", {},
+    h("div", { class: "hero" }, h("h1", {}, "Hash cracker"),
+      h("p", {}, "Identify what kind of hash you have and recover weak passwords from a wordlist.")),
+    formatsLine(s), form, out));
+  if (input.value.trim()) go(); else input.focus();
+}
+
+/* ---- jwt ---- */
+
+async function showJwt() {
+  const token = h("textarea", { class: "lab-input mono", rows: "4", spellcheck: "false", "aria-label": "JWT",
+    placeholder: "Paste a JWT: eyJhbGci...  .  eyJ...  .  signature" });
+  token.value = store.get("ds.jwt.input", "");
+  const wordlist = h("input", { type: "text", class: "domain-input", placeholder: "Optional: wordlist path for the secret search", spellcheck: "false", "aria-label": "Wordlist path" });
+  wordlist.value = store.get("ds.jwt.wordlist", "");
+  const out = h("div", {});
+  const err = h("div", { class: "form-error", role: "alert" });
+  const run = h("button", { class: "btn btn-primary", type: "submit" }, icon("play"), "Decode");
+
+  async function go() {
+    if (!token.value.trim()) { err.textContent = "Paste a JWT first."; return; }
+    err.textContent = "";
+    store.set("ds.jwt.input", token.value.trim());
+    store.set("ds.jwt.wordlist", wordlist.value);
+    run.disabled = true;
+    out.replaceChildren(h("div", { class: "empty" }, h("span", { class: "spinner", style: "display:inline-block" })));
+    try {
+      const r = await api.post("/api/lab/jwt", { token: token.value.trim(), wordlist: wordlist.value.trim() || null });
+      out.replaceChildren(jwtReport(r, token.value.trim()));
+    } catch (ex) { out.replaceChildren(); err.textContent = ex.message; }
+    run.disabled = false;
+  }
+
+  function jwtReport(r, raw) {
+    if (!r.valid) return h("div", { class: "notice danger" }, r.error);
+    const sev = { high: "high", medium: "medium", info: "low" };
+    const findings = h("div", { class: "findings" }, r.findings.map((f) => h("article", { class: `finding sev-${sev[f.severity]}` },
+      h("span", { class: `pill ${sev[f.severity]}` }, f.severity), h("div", {}, h("div", { class: "finding-title" }, f.title), h("div", { class: "finding-detail" }, f.detail)))));
+    const kv = (obj) => h("pre", { class: "lab-output" }, JSON.stringify(obj, null, 2));
+    const parts = [
+      h("div", { class: "tiles" },
+        tile("Algorithm", r.alg.toLowerCase() === "none" ? "bad" : "neutral", r.alg || "—", r.alg.toLowerCase() === "none" ? "No signature required!" : "Signing algorithm"),
+        tile("Signature", r.signature_b64 ? "neutral" : "warn", r.signature_b64 ? "present" : "none", r.signature_b64 ? `${r.signature_b64.length} chars` : "No signature segment")),
+      h("div", { class: "panel" }, h("h3", {}, "Header"), kv(r.header), h("h3", {}, "Payload"), kv(r.payload),
+        r.claims.length ? h("div", {}, r.claims.map((c) => h("div", { class: "row" }, h("span", { class: "muted" }, `${c.claim} (${c.label}): `), c.value, c.note ? h("span", { class: `tag ${c.note === "expired" ? "warn" : "good"}` }, c.note) : null))) : null),
+    ];
+    if (r.findings.length) parts.push(h("div", { class: "panel" }, h("h3", {}, "Findings"), findings));
+    if (r.secret_search) {
+      const ss = r.secret_search;
+      parts.push(h("div", { class: `panel ${ss.secret ? "" : ""}` }, h("h3", {}, "HMAC secret search"),
+        ss.secret
+          ? h("div", { class: "flag-banner" }, h("div", { class: "flag-head" }, icon("flag"), "Secret found"),
+              h("div", { class: "flag-row" }, h("span", { class: "flag-value" }, ss.secret), h("span", { class: "muted" }, `${ss.tried.toLocaleString()} tried`),
+                h("button", { class: "btn btn-sm", type: "button", onclick: () => resign(raw, ss.secret) }, "Forge a token with this secret")))
+          : h("div", { class: "muted" }, `Secret not in the wordlist (${ss.tried.toLocaleString()} tried). Add a wordlist path above for a bigger search.`)));
+    }
+    // alg:none forge helper
+    const payloadBox = h("textarea", { class: "lab-input mono", rows: "3", spellcheck: "false" }, JSON.stringify(r.payload, null, 2));
+    const forgeOut = h("div", {});
+    parts.push(h("div", { class: "panel" }, h("h3", {}, "Forge an alg:none token"),
+      h("p", { class: "muted" }, "Some servers accept a token with alg:none and no signature. Edit the payload, then generate one to try."),
+      payloadBox,
+      h("button", { class: "btn", type: "button", style: "margin-top:10px", onclick: async () => {
+        try {
+          const res = await api.post("/api/lab/jwt", { token: raw, forge_payload: payloadBox.value });
+          forgeOut.replaceChildren(tokenOut(res.forged_none, "alg:none token"));
+        } catch (ex) { forgeOut.replaceChildren(h("div", { class: "form-error" }, ex.message)); }
+      } }, "Generate"), forgeOut));
+    return h("div", {}, parts);
+  }
+
+  async function resign(raw, secret) {
+    try {
+      const res = await api.post("/api/lab/jwt", { token: raw, resign_secret: secret });
+      out.prepend(tokenOut(res.resigned, `token re-signed with "${secret}"`));
+    } catch (ex) { err.textContent = ex.message; }
+  }
+
+  function tokenOut(tok, label) {
+    return h("div", { class: "flag-banner", style: "margin-top:10px" },
+      h("div", { class: "flag-head" }, icon("flag"), label),
+      h("pre", { class: "lab-output", style: "margin:0" }, tok),
+      h("button", { class: "btn btn-sm", type: "button", onclick: () => copyText(tok) }, icon("copy"), "Copy token"));
+  }
+
+  token.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); go(); } });
+  const form = h("form", { class: "panel", onsubmit: (e) => { e.preventDefault(); go(); } },
+    token,
+    h("details", { class: "options", style: "margin:12px 0" }, h("summary", {}, icon("sliders"), "Secret wordlist (optional)"),
+      h("div", { class: "options-body" }, h("div", { class: "toggle-text" }, h("strong", {}, "Wordlist file"), h("span", {}, "For the HMAC secret search, beyond the built-in common secrets.")), wordlist)),
+    h("div", { class: "lab-controls" }, run),
+    h("div", { class: "muted lab-tip" }, "A JWT is only base64, not encrypted - anyone can read it. Check tokens from challenges or your own test apps."),
+    err);
+
+  render(h("section", {},
+    h("div", { class: "hero" }, h("h1", {}, "JWT inspector"),
+      h("p", {}, "Decode a JSON Web Token, flag its weaknesses, and recover a weak signing secret.")),
+    form, out));
+  if (token.value.trim()) go(); else token.focus();
+}
+
+/* ---- pcap / network tab in the file analyser ---- */
+
+function fileNetwork(r) {
+  const p = r.pcap;
+  if (!p || p.error) return h("div", { class: "panel" }, h("div", { class: "empty" }, p?.error || "Not a readable capture."));
+  const table = (title, head, rows, note) => h("div", { class: "panel" }, h("h3", {}, title),
+    note ? h("p", { class: "muted" }, note) : null,
+    rows.length ? h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, head.map((x) => h("th", {}, x)))), h("tbody", {}, rows)))
+      : h("p", { class: "muted" }, "None."));
+  const parts = [];
+  if (p.credentials.length) {
+    parts.push(h("div", { class: "panel" }, h("h3", {}, `Credentials sent in the clear (${p.credentials.length})`),
+      h("p", { class: "muted" }, "These protocols don't encrypt, so usernames and passwords travelled in plaintext."),
+      h("div", { class: "table-wrap" }, h("table", {}, h("thead", {}, h("tr", {}, ["Protocol", "Server", "Data"].map((x) => h("th", {}, x)))),
+        h("tbody", {}, p.credentials.map((c) => h("tr", { class: "flag-row-hit" },
+          h("td", {}, h("span", { class: "tag warn" }, c.protocol)), h("td", { class: "mono" }, c.server),
+          h("td", { class: "mono" }, highlightFlags(c.data, r.flags),
+            " ", h("button", { class: "btn btn-sm btn-ghost", type: "button", onclick: () => copyText(c.data) }, icon("copy"))))))))));
+  }
+  parts.push(h("div", { class: "tiles" },
+    tile("Packets", "neutral", p.packets.toLocaleString(), p.truncated ? "Truncated at the limit." : "Total in the capture."),
+    tile("Credentials", p.credentials.length ? "bad" : "good", String(p.credentials.length), p.credentials.length ? "Plaintext logins found." : "None in the clear."),
+    tile("DNS lookups", "neutral", String(p.dns.length), "Distinct names queried."),
+    tile("HTTP requests", "neutral", String(p.http.length), "Captured plaintext HTTP.")));
+  parts.push(table("Protocols", ["Protocol", "Packets"], p.protocols.map((x) => h("tr", {}, h("td", {}, x.name), h("td", {}, x.packets.toLocaleString())))));
+  parts.push(table("Top talkers", ["Host", "Packets"], p.top_talkers.map((x) => h("tr", {}, h("td", { class: "mono" }, x.host), h("td", {}, x.packets.toLocaleString())))));
+  if (p.dns.length) parts.push(table("DNS queries", ["Name", "Count"], p.dns.map((x) => h("tr", {},
+    h("td", { class: "mono" }, highlightFlags(x.name, r.flags), " ",
+      h("button", { class: "btn btn-sm btn-ghost send", type: "button", title: "Send to decoder", onclick: () => sendToDecoder(x.name) }, "decode")),
+    h("td", {}, x.count)))));
+  if (p.http.length) parts.push(table("HTTP requests", ["Method", "Host", "Path", "From → To"],
+    p.http.map((x) => h("tr", {}, h("td", {}, x.method), h("td", { class: "mono" }, x.host),
+      h("td", { class: "mono" }, highlightFlags(x.path, r.flags)), h("td", { class: "mono muted" }, `${x.src} → ${x.dst}`))),
+    "URLs and paths often carry tokens or flags."));
+  return h("div", {}, parts);
 }
 
 /* ================================================================== settings */

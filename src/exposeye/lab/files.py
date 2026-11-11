@@ -21,7 +21,7 @@ from pathlib import PurePath
 import numpy as np
 from PIL import ExifTags, Image, UnidentifiedImageError
 
-from exposeye.lab import stego
+from exposeye.lab import pcap, stego
 from exposeye.lab.flags import FlagHunter
 
 MAX_FILE = 50 * 1024 * 1024
@@ -606,6 +606,13 @@ def analyse(data: bytes, name: str, hunter: FlagHunter | None = None) -> dict:
     looks_like_text = not kind and strs and sum(len(s["text"]) for s in strs) > len(data) * 0.6
     result["text_stego"] = stego.text_stego(data, hunter) if looks_like_text or kind is None else []
     result["jpeg_tools"] = stego.jpeg_tools() if kind == "jpg" else None
+    result["pcap"] = None
+    if kind in ("pcap", "pcapng"):
+        try:
+            result["pcap"] = pcap.analyse(data, hunter)
+        except pcap.PcapError as exc:
+            errors_pcap = str(exc)
+            result["pcap"] = {"error": errors_pcap}
 
     # Flag hunt across everything we extracted.
     sources: dict[str, str] = {}
@@ -640,6 +647,12 @@ def analyse(data: bytes, name: str, hunter: FlagHunter | None = None) -> dict:
     for item in result["text_stego"]:
         for f in item["flags"]:
             flags.setdefault(f["value"], {**f, "where": item["method"]})
+    if result["pcap"] and not result["pcap"].get("error"):
+        for f in result["pcap"]["flags"]:
+            flags.setdefault(f["value"], {**f, "where": f"network capture ({f.get('where', '')})"})
+        for c in result["pcap"]["credentials"]:
+            for f in hunter.scan(c["data"]):
+                flags.setdefault(f["value"], {**f, "where": f"{c['protocol']} credential"})
     if result["audio"]:
         for key in ("dtmf", "morse"):
             if result["audio"][key]:
@@ -750,8 +763,15 @@ def hints(r: dict) -> list[str]:
         )
     if r["type"]["type"] in ("pcap", "pcapng"):
         out.append(
-            "It's a network capture. Open it in Wireshark (a PCAP analyser is planned for the Lab)."
+            "It's a network capture - see the Network tab for DNS, HTTP and any credentials sent in "
+            "the clear. Open it in Wireshark for deeper analysis."
         )
+        p = r.get("pcap") or {}
+        if p.get("credentials"):
+            out.append(
+                f"Plaintext credentials were captured: {len(p['credentials'])} "
+                f"({', '.join(sorted({c['protocol'] for c in p['credentials']}))}). See the Network tab."
+            )
     if not out:
         out.append(
             "Nothing obviously hidden. Check the strings, the metadata and the entropy graph for anything odd."

@@ -148,9 +148,25 @@ they look like English or a flag. Any result can be decoded further with one cli
 - Strings (ASCII and UTF-16), an entropy graph, hashes and a hex view, plus plain-English
   **"what to look at"** hints
 
+**Hash cracker:** identifies a hash from its shape (MD5, SHA-x, NTLM, bcrypt, Linux shadow,
+and so on) and recovers weak passwords from the built-in common list, words you paste, or a
+wordlist file such as `rockyou.txt`. Salted or slow schemes are identified and handed off to
+john/hashcat. This is the standard "crack this CTF hash" workflow, run locally.
+
+**JWT inspector:** decodes a JSON Web Token's header and payload, flags the classic weaknesses
+(`alg: none`, weak HMAC secret, RS/HS algorithm confusion, `jku`/`kid` tricks, expiry), finds a
+weak signing secret from a wordlist, and forges tokens (`alg:none` or re-signed with a recovered
+secret) to paste back into a challenge or your own test app.
+
+**Network capture (PCAP/PCAPNG):** drop a capture into the File analyser for a **Network** tab:
+protocol and talker breakdown, DNS queries, HTTP requests, and — the usual goal — any credentials
+sent in the clear (HTTP Basic, FTP, POP3). Parsing is built in, so no extra dependency.
+
 ```bash
 exposeye-lab decode "NzM3OTZlNzQ3YjZh..."     # auto-decode from the terminal
 exposeye-lab --flag "myctf{...}" file chall.png
+exposeye-lab hash 5f4dcc3b5aa765d61d8327deb882cf99 --wordlist rockyou.txt
+exposeye-lab jwt eyJhbGci...                   # decode + check a token
 ```
 
 ![CTF Lab decoder](docs/app-lab-decoder.png)
@@ -162,12 +178,13 @@ exposeye-lab --flag "myctf{...}" file chall.png
 ![Bit-plane viewer revealing hidden text](docs/app-lab-stego.png)
 
 ![Spectrogram with a hidden message](docs/app-lab-audio.png)
+
+![Network capture with plaintext credentials](docs/app-lab-network.png)
 </details>
 
 Reverse engineering and binary exploitation are better served by dedicated tools (Ghidra,
 pwntools). The analyser triages executables (format and architecture, plus strings) and says so.
-Planned next for the Lab: hash and JWT tools, a PCAP analyser, and RSA and classical-cipher
-helpers.
+Planned next for the Lab: RSA and classical-cipher helpers.
 
 ## Association map
 
