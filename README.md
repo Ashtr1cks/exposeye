@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-**See what you expose: a passive-first OSINT toolkit, as a desktop app and a CLI.**
+**A local, all-in-one cybersecurity toolkit: OSINT recon, monitoring and a CTF lab, as a desktop app and a CLI.**
 
 - **Domains:** registration, DNS and email-security posture, subdomains from Certificate
   Transparency logs, hosting, and optional HTTP/TLS checks.
@@ -13,6 +13,8 @@
 - **Emails:** which data breaches include an address, and whether passwords leaked. Plus a
   private password-leak check.
 - **Monitoring:** re-checks on a schedule and alerts you when something changes for the worse.
+- **CTF Lab:** an auto-decoder that peels off layered encodings, and a file analyser for
+  forensics and steganography challenges, with flags highlighted wherever they turn up.
 
 Every finding is explained in plain English, and any scan can be exported as HTML, Markdown or
 JSON. No API keys, no accounts, and nothing to configure.
@@ -108,6 +110,50 @@ Monitoring alerts when a risky port opens or a new known-exploited CVE appears.
 > is refreshed weekly.
 
 ![Ports & CVEs view](docs/app-exposure.png)
+
+## CTF Lab
+
+Tools for Capture-the-Flag challenges, under **Lab** in the sidebar. Set your competition's flag
+format once in Settings (for example `picoCTF{...}`, or `re:` plus a regex). Every Lab tool then
+hunts for it and highlights matches, including deep inside decoded layers, metadata or hidden
+files.
+
+**Decoder:** paste anything encoded. It tries base64, base32, base58, base85, hex, binary,
+decimal and octal bytes, URL encoding, HTML entities, `\x`/`\u` escapes, Morse, ROT13 and all
+Caesar shifts, ROT47, Atbash, reversal, single-byte XOR brute force, and gzip, zlib, bzip2 and xz.
+It follows multi-layer chains (for example base64 → hex → ROT13) and ranks outputs by how much
+they look like English or a flag. Any result can be decoded further with one click.
+
+**File analyser:** drop in a challenge file (it's only read, never run). It reports:
+- The **real file type** from magic bytes, flagging extensions that lie
+- **Embedded files** (binwalk-style signature scan) and **data appended after the end** of PNG,
+  JPEG, PDF and ZIP files, all extractable with one click
+- **ZIP archives inside images**: lists them and searches even *compressed* member files for flags
+- **Metadata:** EXIF with GPS shown on a map, PNG text chunks, PDF info (JavaScript, embedded
+  files, revisions) and Office document properties
+- **Tampered PNG headers:** a height or width edited to hide part of the image is detected from
+  the checksum, and the real size is recovered with a download of the repaired image
+- **LSB steganography:** extraction across channels, bits and bit orders, ranked by readable
+  text, plus bit-plane images
+- Strings (ASCII and UTF-16), an entropy graph, hashes and a hex view, plus plain-English
+  **"what to look at"** hints
+
+```bash
+exposeye-lab decode "NzM3OTZlNzQ3YjZh..."     # auto-decode from the terminal
+exposeye-lab --flag "myctf{...}" file chall.png
+```
+
+![CTF Lab decoder](docs/app-lab-decoder.png)
+
+<details><summary>Screenshot: file analyser</summary>
+
+![CTF Lab file analyser](docs/app-lab-file.png)
+</details>
+
+Reverse engineering and binary exploitation are better served by dedicated tools (Ghidra,
+pwntools). The analyser triages executables (format and architecture, plus strings) and says so.
+Planned next for the Lab: hash and JWT tools, a PCAP analyser, and RSA and classical-cipher
+helpers.
 
 ## Association map
 
@@ -287,6 +333,11 @@ src/exposeye/
 ├── scanner.py          # domain scan: runs modules, aggregates findings
 ├── emailcheck.py       # email check: breaches, domain, profile, advice
 ├── watch_cli.py        # monitoring CLI (used by the scheduled task)
+├── lab_cli.py          # CTF lab CLI (decode / file)
+├── lab/
+│   ├── flags.py        # flag-format hunter shared by all Lab tools
+│   ├── decoder.py      # auto-decoder (beam search over encodings)
+│   └── files.py        # file analyser: signatures, metadata, PNG repair, LSB stego
 ├── settings.py         # ~/.exposeye/settings.json (HIBP key, alert settings)
 ├── storage.py          # scan history + cross-process file lock
 ├── monitor/

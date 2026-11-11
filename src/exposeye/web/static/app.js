@@ -42,6 +42,8 @@ const ICONS = {
   external: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5"/>',
   refresh: '<path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
+  upload: '<path d="M12 16V4M7 9l5-5 5 5M5 20h14"/>',
   expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   shrink: '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>',
   server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
@@ -251,7 +253,8 @@ const RISK = {
 
 /* ================================================================== state & history */
 
-const state = { stream: null, tick: null, jobs: {}, history: [], running: [], cy: null, mapCleanup: null, monitorTimer: null };
+const state = { stream: null, tick: null, jobs: {}, history: [], running: [], cy: null, mapCleanup: null, monitorTimer: null,
+  settings: null, labInput: null, labFile: null };
 
 function closeStream() {
   if (state.stream) { state.stream.close(); state.stream = null; }
@@ -290,6 +293,8 @@ function drawHistory() {
   ul.replaceChildren(...(items.length ? items : [h("li", { class: "history-empty" }, "No scans yet")]));
   document.getElementById("settingsLink").classList.toggle("active", location.hash === "#/settings");
   document.getElementById("monitorLink").classList.toggle("active", location.hash === "#/monitor");
+  document.getElementById("decoderLink").classList.toggle("active", location.hash === "#/lab/decode");
+  document.getElementById("fileLink").classList.toggle("active", location.hash === "#/lab/file");
 }
 
 async function refreshBadge() {
@@ -312,6 +317,8 @@ function route() {
   else if (view === "progress" && id) showProgress(id);
   else if (view === "compare" && id) showCompare(id);
   else if (view === "monitor") showMonitor();
+  else if (view === "lab" && id === "decode") showDecoder();
+  else if (view === "lab" && id === "file") showFileLab();
   else if (view === "settings") showSettings();
   else showNew();
   drawHistory();
@@ -1877,7 +1884,410 @@ async function showCompare(id) {
     h("a", { class: "btn", href: `#/scan/${d.previous.id}` }, "Open the earlier scan")));
 }
 
+/* ================================================================== lab (CTF tools) */
+
+const LAB_EXAMPLE = "NzM3OTZlNzQ3YjZhNzI3OTcwNjI3YTcyNWY2NzYyNWY2Nzc1NzI1Zjc5NmU2Zjdk"; // base64 > hex > ROT13
+
+async function labSettings(force) {
+  if (!state.settings || force) {
+    try { state.settings = await api.get("/api/settings"); } catch { state.settings = { flag_formats: [], flag_generic: true }; }
+  }
+  return state.settings;
+}
+
+// Split text around flag values and wrap them in <mark> (DOM nodes only, never HTML strings).
+function highlightFlags(text, flags) {
+  const conf = Object.fromEntries((flags || []).map((f) => [f.value, f.confidence]));
+  const values = Object.keys(conf).filter(Boolean).sort((a, b) => b.length - a.length);
+  if (!values.length || !text) return [text];
+  const re = new RegExp(values.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
+  const out = [];
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    out.push(h("mark", { class: `flag-mark ${conf[m[0]] === "high" ? "" : "possible"}` }, m[0]));
+    last = m.index + m[0].length;
+  }
+  out.push(text.slice(last));
+  return out;
+}
+
+function flagBanner(flags) {
+  if (!flags?.length) return null;
+  const confirmed = flags.some((f) => f.confidence === "high");
+  return h("div", { class: `flag-banner ${confirmed ? "" : "possible"}` },
+    h("div", { class: "flag-head" }, icon("flag"),
+      confirmed ? `${plural(flags.length, "flag")} found` : "Possible flags (not in your configured formats)"),
+    flags.map((f) => h("div", { class: "flag-row" },
+      h("code", { class: "flag-value" }, f.value),
+      h("span", { class: "muted" },
+        f.chain ? `via ${f.chain.length ? f.chain.join(" → ") : "the input itself"}` : f.where ? `in ${f.where}` : ""),
+      h("button", { class: "btn btn-sm btn-ghost", type: "button", onclick: () => copyText(f.value) }, icon("copy"), "Copy"))));
+}
+
+function formatsLine(s) {
+  return h("div", { class: "formats-line muted" }, "Flag formats: ",
+    (s.flag_formats || []).map((f) => h("code", {}, f)), s.flag_generic ? " + anything shaped like xyz{…}" : "",
+    " · ", h("a", { href: "#/settings" }, "change"));
+}
+
+function sendToDecoder(text) {
+  state.labInput = text;
+  location.hash = "#/lab/decode";
+}
+
+/* ---- decoder ---- */
+
+async function showDecoder() {
+  const s = await labSettings();
+  const input = h("textarea", { class: "lab-input mono", rows: "6", spellcheck: "false", "aria-label": "Text to decode",
+    placeholder: "Paste encoded text: base64, hex, binary, Caesar/ROT, XOR, Morse, URL encoding… even several layers deep" });
+  input.value = state.labInput ?? store.get("ds.lab.input", "");
+  state.labInput = null;
+  const depth = h("select", { "aria-label": "Maximum layers" }, [1, 2, 3, 4, 5, 6].map((n) => h("option", { value: String(n) }, `${n} layer${n > 1 ? "s" : ""}`)));
+  depth.value = String(store.get("ds.lab.depth", 4));
+  const caesar = h("input", { type: "checkbox", checked: store.get("ds.lab.caesar", true) });
+  const xor = h("input", { type: "checkbox", checked: store.get("ds.lab.xor", true) });
+  const out = h("div", { class: "lab-results" });
+  const err = h("div", { class: "form-error", role: "alert" });
+  const run = h("button", { class: "btn btn-primary", type: "submit" }, icon("play"), "Decode");
+
+  async function decodeNow() {
+    const text = input.value;
+    if (!text.trim()) { err.textContent = "Paste something to decode first."; return; }
+    err.textContent = "";
+    store.set("ds.lab.input", text.length < 20000 ? text : "");
+    store.set("ds.lab.depth", Number(depth.value));
+    store.set("ds.lab.caesar", caesar.checked);
+    store.set("ds.lab.xor", xor.checked);
+    run.disabled = true;
+    out.replaceChildren(h("div", { class: "empty" }, h("span", { class: "spinner", style: "display:inline-block" })));
+    const t0 = performance.now();
+    try {
+      const r = await api.post("/api/lab/decode", { input: text, depth: Number(depth.value), caesar: caesar.checked, xor: xor.checked });
+      const ms = Math.round(performance.now() - t0);
+      out.replaceChildren(
+        flagBanner(r.flags) || h("div", { class: "notice" }, "No flag found yet. The most readable results are below; you can decode any of them further."),
+        h("div", { class: "muted lab-meta" }, `${plural(r.explored, "candidate")} tried in ${ms} ms`),
+        ...(r.results.length ? resultList(r.results)
+          : [h("div", { class: "empty" }, "Nothing decoded. It may be a cipher that needs a key (Vigenère, AES…) or not encoded at all.")]));
+    } catch (ex) { out.replaceChildren(); err.textContent = ex.message; }
+    run.disabled = false;
+  }
+
+  // Show what matters first: every result containing a flag plus the next few best; the long tail
+  // of brute-force guesses stays behind a button.
+  function resultList(results) {
+    const confirmed = (res) => res.flags.some((f) => f.confidence === "high");
+    const anyConfirmed = results.some(confirmed);
+    const withFlags = results.filter((res) => (anyConfirmed ? confirmed(res) : res.flags.length)).length;
+    const first = withFlags ? withFlags + 3 : 8;
+    const cards = results.slice(0, first).map(resultCard);
+    if (results.length > first) {
+      const more = h("button", { class: "btn btn-ghost show-more", type: "button" }, `Show ${results.length - first} more results`);
+      more.addEventListener("click", () => more.replaceWith(...results.slice(first).map(resultCard)));
+      cards.push(more);
+    }
+    return cards;
+  }
+
+  function resultCard(res) {
+    const chain = h("div", { class: "chain" }, h("span", { class: "chain-step start" }, "input"),
+      res.chain.map((c) => [h("span", { class: "chain-arrow" }, "→"), h("span", { class: "chain-step" }, c)]));
+    const body = res.printable
+      ? h("pre", { class: "lab-output" }, highlightFlags(res.text, res.flags))
+      : h("pre", { class: "lab-output muted" }, `binary (${res.length} bytes): ${res.hex}`);
+    const high = res.flags.some((f) => f.confidence === "high");
+    const maybe = !high && res.flags.length > 0;
+    return h("article", { class: `lab-card ${high ? "has-flag" : maybe ? "maybe-flag" : ""}` },
+      h("div", { class: "lab-card-head" }, chain,
+        h("span", { class: "score", title: "How readable / flag-like the output is" },
+          high ? "flag!" : maybe ? "maybe" : `${Math.round(Math.min(res.score, 1) * 100)}%`)),
+      body,
+      h("div", { class: "lab-actions" },
+        res.printable ? h("button", { class: "btn btn-sm", type: "button", onclick: () => copyText(res.text) }, icon("copy"), "Copy") : null,
+        res.printable ? h("button", { class: "btn btn-sm", type: "button", onclick: () => { input.value = res.text; decodeNow(); window.scrollTo(0, 0); } }, icon("refresh"), "Decode this further") : null));
+  }
+
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); decodeNow(); } });
+  const form = h("form", { class: "panel", onsubmit: (e) => { e.preventDefault(); decodeNow(); } },
+    input,
+    h("div", { class: "lab-controls" }, run,
+      h("button", { class: "btn btn-ghost", type: "button", onclick: () => { input.value = ""; out.replaceChildren(); input.focus(); } }, "Clear"),
+      depth,
+      h("label", { class: "toggle inline" }, caesar, h("span", { class: "switch" }), h("span", {}, "Caesar / ROT")),
+      h("label", { class: "toggle inline" }, xor, h("span", { class: "switch" }), h("span", {}, "XOR brute force")),
+      h("button", { class: "btn btn-ghost", type: "button", onclick: () => { input.value = LAB_EXAMPLE; decodeNow(); } }, "Try an example")),
+    h("div", { class: "muted lab-tip" }, "Tip: Ctrl+Enter decodes. Everything runs on this PC."),
+    err);
+
+  render(h("section", {},
+    h("div", { class: "hero" }, h("h1", {}, "Decoder"),
+      h("p", {}, "Paste anything encoded. Layers are unwrapped automatically and results are ranked by how readable they are, so a flag jumps to the top.")),
+    formatsLine(s), form, out));
+  if (input.value) decodeNow(); else input.focus();
+}
+
+/* ---- file analyser ---- */
+
+function sparkline(values) {
+  const w = 320, hgt = 56;
+  if (!values?.length) return null;
+  const step = values.length > 1 ? w / (values.length - 1) : w;
+  const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(hgt - (v / 8) * hgt).toFixed(1)}`).join(" ");
+  const svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${w} ${hgt}`);
+  svg.setAttribute("class", "sparkline");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Entropy across the file (0 to 8 bits per byte)");
+  const line = document.createElementNS(SVGNS, "polyline");
+  line.setAttribute("points", pts);
+  const high = document.createElementNS(SVGNS, "line");
+  const y = hgt - (7.5 / 8) * hgt;
+  for (const [k, v] of Object.entries({ x1: 0, x2: w, y1: y, y2: y, class: "threshold" })) high.setAttribute(k, v);
+  svg.append(high, line);
+  return svg;
+}
+
+function fileSize(n) {
+  return n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+}
+
+async function showFileLab() {
+  const s = await labSettings();
+  const picker = h("input", { type: "file", hidden: true });
+  const status = h("div", { class: "form-error", role: "alert" });
+  const results = h("div", {});
+  const drop = h("div", { class: "dropzone", tabindex: "0", role: "button", "aria-label": "Choose or drop a file to analyse" },
+    icon("upload"), h("strong", {}, "Drop a challenge file here, or click to choose"),
+    h("span", { class: "muted" }, "Images, archives, PDFs, binaries, dumps… up to 50 MB. Files are only read, never run, and stay on this PC."));
+
+  async function analyse(file) {
+    if (!file) return;
+    status.textContent = "";
+    if (file.size > 50 * 1048576) { status.textContent = "Files up to 50 MB are supported."; return; }
+    results.replaceChildren(h("div", { class: "empty" }, h("span", { class: "spinner", style: "display:inline-block" }), h("div", {}, `Analysing ${file.name}…`)));
+    try {
+      const res = await fetch(`/api/lab/files?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+      state.labFile = await res.json();
+      results.replaceChildren(fileReport(state.labFile));
+    } catch (ex) { results.replaceChildren(); status.textContent = ex.message; }
+  }
+  picker.addEventListener("change", () => analyse(picker.files[0]));
+  drop.addEventListener("click", () => picker.click());
+  drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); picker.click(); } });
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); analyse(e.dataTransfer.files[0]); });
+
+  render(h("section", {},
+    h("div", { class: "hero" }, h("h1", {}, "File analyser"),
+      h("p", {}, "Finds what's hidden in a file: the real type, embedded files, data after the end, metadata, tampered PNG headers, LSB steganography and flags.")),
+    formatsLine(s), drop, picker, status, results));
+  if (state.labFile) results.replaceChildren(fileReport(state.labFile));
+}
+
+function fileReport(r) {
+  const dl = (path, label) => h("a", { class: "btn btn-sm", href: path, download: "" }, icon("download"), label);
+  const extractUrl = (start, end) => `/api/lab/files/${r.id}/extract?start=${start}${end != null ? `&end=${end}` : ""}`;
+  const hiddenCount = (r.trailing ? 1 : 0) + r.embedded.filter((e) => !e.note).length + (r.png?.fixed_size ? 1 : 0);
+  const tabs = [
+    ["overview", "Overview", null],
+    ["strings", "Strings", r.strings.length],
+    ["hidden", "Hidden data", hiddenCount || null],
+    ["meta", "Metadata", null],
+    r.lsb ? ["stego", "Steganography", null] : null,
+    ["hex", "Hex", null],
+  ].filter(Boolean);
+  const t = tabbed("file", tabs, {
+    overview: () => fileOverview(r),
+    strings: () => fileStrings(r),
+    hidden: () => fileHidden(r, dl, extractUrl),
+    meta: () => fileMeta(r),
+    stego: () => fileStego(r),
+    hex: () => h("div", { class: "panel" }, h("pre", { class: "hexdump" }, r.hexdump || "(empty)"),
+      h("p", { class: "muted" }, "First 512 bytes.")),
+  });
+  const view = h("div", { class: "file-report" },
+    h("div", { class: "result-head" },
+      h("div", {}, h("h1", { class: "mono" }, r.name),
+        h("div", { class: "result-meta" }, h("span", {}, fileSize(r.size)), "·",
+          h("span", { class: `badge ${r.type.type ? "accent" : ""}` }, r.type.description),
+          r.extension_mismatch ? h("span", { class: "badge warn-badge" }, `not really .${r.extension}`) : null))),
+    flagBanner(r.flags),
+    h("div", { class: "panel hints" }, h("h3", {}, "What to look at"),
+      h("ol", {}, r.hints.map((x) => h("li", {}, x)))),
+    t.bar, t.panel);
+  t.first();
+  return view;
+}
+
+function fileOverview(r) {
+  const chips = (items, label) => (items?.length ? [h("dt", {}, label), h("dd", {}, items.map((v) =>
+    label === "Base64-looking"
+      ? h("button", { class: "tag tag-btn", type: "button", title: "Send to the decoder", onclick: () => sendToDecoder(v) }, v.length > 40 ? `${v.slice(0, 40)}…` : v)
+      : h("span", { class: "tag" }, v)))] : null);
+  return h("div", {},
+    h("div", { class: "tiles" },
+      tile("Real type", r.type.type ? "neutral" : "warn", r.type.type || "unknown", r.type.description),
+      tile("Extension", r.extension_mismatch ? "bad" : "good", r.extension ? `.${r.extension}` : "none",
+        r.extension_mismatch ? "Doesn't match the content!" : "Matches the content."),
+      h("div", { class: `tile ${r.entropy > 7.5 ? "warn" : "neutral"}` },
+        h("div", { class: "tile-head" }, "Entropy", h("span", { class: "tag" }, `${r.entropy} / 8`)),
+        sparkline(r.entropy_profile),
+        h("p", {}, r.entropy > 7.5 ? "Very random: compressed or encrypted." : "Spikes can mark hidden compressed/encrypted data."))),
+    h("div", { class: "panel" }, h("h3", {}, "Hashes"),
+      h("dl", { class: "kv" }, Object.entries(r.hashes).map(([k, v]) => [h("dt", {}, k.toUpperCase()),
+        h("dd", {}, h("code", {}, v), " ", h("button", { class: "btn btn-sm btn-ghost", type: "button", onclick: () => copyText(v) }, icon("copy")))]))),
+    h("div", { class: "panel" }, h("h3", {}, "Interesting strings"),
+      h("dl", { class: "kv" }, chips(r.interesting.urls, "URLs"), chips(r.interesting.emails, "Emails"),
+        chips(r.interesting.ips, "IP addresses"), chips(r.interesting.base64, "Base64-looking")),
+      !(r.interesting.urls.length || r.interesting.emails.length || r.interesting.ips.length || r.interesting.base64.length)
+        ? h("p", { class: "muted" }, "None found.") : h("p", { class: "muted" }, "Click a base64-looking string to decode it.")));
+}
+
+function fileStrings(r) {
+  let q = "";
+  let only = false;
+  const list = h("div", { class: "strings-list" });
+  const search = h("input", { type: "search", class: "search", placeholder: "Filter strings…", "aria-label": "Filter strings" });
+  const onlyBox = h("input", { type: "checkbox" });
+  const counter = h("span", { class: "muted" });
+  const flagValues = new Set(r.flags.map((f) => f.value));
+  const interestingRe = /https?:\/\/|@|\{.*\}|pass|secret|key|token|admin|flag|ctf|hidden/i;
+  function draw() {
+    const rows = r.strings.filter((x) => (!q || x.text.toLowerCase().includes(q)) && (!only || interestingRe.test(x.text)));
+    counter.textContent = `${rows.length} of ${r.strings.length}${r.strings.length >= 4000 ? " (first 4000)" : ""}`;
+    list.replaceChildren(...rows.slice(0, 1500).map((x) => h("div", { class: "string-row" },
+      h("span", { class: "offset" }, `0x${x.offset.toString(16).padStart(6, "0")}`),
+      h("span", { class: "string-text" }, highlightFlags(x.text, r.flags)),
+      x.encoding !== "ascii" ? h("span", { class: "tag" }, x.encoding) : null,
+      h("button", { class: "btn btn-sm btn-ghost send", type: "button", title: "Send to the decoder", onclick: () => sendToDecoder(x.text) }, "decode"))));
+    if (rows.length > 1500) list.append(h("div", { class: "muted" }, `…${rows.length - 1500} more. Use the filter.`));
+    if (![...flagValues].length && !rows.length) list.append(h("div", { class: "empty" }, "No matching strings."));
+  }
+  search.addEventListener("input", () => { q = search.value.toLowerCase(); draw(); });
+  onlyBox.addEventListener("change", () => { only = onlyBox.checked; draw(); });
+  draw();
+  return h("div", { class: "panel" },
+    h("div", { class: "toolbar" }, search,
+      h("label", { class: "toggle inline" }, onlyBox, h("span", { class: "switch" }), h("span", {}, "Interesting only")), counter),
+    list);
+}
+
+function fileHidden(r, dl, extractUrl) {
+  const parts = [];
+  if (r.png?.fixed_size) {
+    const f = r.png.fixed_size;
+    parts.push(h("div", { class: "panel" }, h("h3", {}, "Tampered PNG header"),
+      h("p", {}, `The header claims ${f.original[0]}×${f.original[1]}, but its checksum only matches ${f.width}×${f.height}. Part of the image is being hidden.`),
+      dl(`/api/lab/files/${r.id}/fixed-png?width=${f.width}&height=${f.height}`, `Download repaired PNG (${f.width}×${f.height})`)));
+  }
+  if (r.trailing) {
+    parts.push(h("div", { class: "panel" }, h("h3", {}, "Data after the end of the file"),
+      h("p", {}, `${fileSize(r.trailing.size)} starting at offset 0x${r.trailing.offset.toString(16)}`, r.trailing.type ? `, looks like: ${r.trailing.type}` : "", "."),
+      h("pre", { class: "hexdump" }, r.trailing.hex),
+      dl(extractUrl(r.trailing.offset), "Extract appended data")));
+  }
+  parts.push(h("div", { class: "panel" }, h("h3", {}, `Embedded file signatures (${r.embedded.length})`),
+    r.embedded.length ? h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, ["Offset", "Looks like", "Size to next", ""].map((x) => h("th", {}, x)))),
+      h("tbody", {}, r.embedded.map((e) => h("tr", {},
+        h("td", { class: "mono" }, `0x${e.offset.toString(16)}`),
+        h("td", {}, e.description, e.note ? h("span", { class: "muted" }, ` (${e.note})`) : null),
+        h("td", {}, fileSize(e.end - e.offset)),
+        h("td", {}, dl(extractUrl(e.offset, e.end), "Extract")))))))
+      : h("p", { class: "muted" }, "No other file signatures inside this file.")));
+  if (r.png) {
+    parts.push(h("div", { class: "panel" }, h("h3", {}, "PNG chunks"),
+      r.png.problems.length ? h("div", { class: "notice danger" }, r.png.problems.join("; ")) : null,
+      h("div", { class: "table-wrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, ["Chunk", "Offset", "Length", "CRC"].map((x) => h("th", {}, x)))),
+        h("tbody", {}, r.png.chunks.slice(0, 200).map((c) => h("tr", {},
+          h("td", { class: "mono" }, c.type, r.png.unusual.includes(c.type) ? h("span", { class: "tag note" }, "unusual") : null),
+          h("td", { class: "mono" }, `0x${c.offset.toString(16)}`), h("td", {}, c.length),
+          h("td", {}, c.crc_ok ? h("span", { class: "tag good" }, "ok") : h("span", { class: "tag warn" }, "bad")))))))));
+  }
+  return h("div", {}, parts);
+}
+
+function fileMeta(r) {
+  const kv = (obj) => h("dl", { class: "kv" }, Object.entries(obj).map(([k, v]) => [h("dt", {}, k), h("dd", { class: "mono" }, highlightFlags(String(v), r.flags))]));
+  const parts = [];
+  if (r.image) {
+    const g = r.image.gps;
+    parts.push(h("div", { class: "panel" }, h("h3", {}, `Image: ${r.image.format} ${r.image.width}×${r.image.height} (${r.image.mode})`),
+      g ? h("div", { class: "notice" }, `GPS: ${g.lat}, ${g.lon} `, h("a", { href: g.maps, target: "_blank", rel: "noopener noreferrer" }, "open map")) : null,
+      Object.keys(r.image.exif).length ? [h("h4", {}, "EXIF"), kv(r.image.exif)] : null,
+      Object.keys(r.image.text).length ? [h("h4", {}, "Embedded text"), kv(r.image.text)] : null,
+      !Object.keys(r.image.exif).length && !Object.keys(r.image.text).length && !g ? h("p", { class: "muted" }, "No EXIF or text metadata.") : null));
+  }
+  if (r.pdf) {
+    parts.push(h("div", { class: "panel" }, h("h3", {}, `PDF (${r.pdf.pages} page${r.pdf.pages === 1 ? "" : "s"}, ${r.pdf.revisions} revision${r.pdf.revisions === 1 ? "" : "s"})`),
+      kv(r.pdf.info),
+      h("p", {}, ["javascript", "embedded_files", "auto_action"].map((k) => h("span", { class: `tag ${r.pdf[k] ? "warn" : "good"}` }, `${k.replace("_", " ")}: ${r.pdf[k] ? "yes" : "no"}`))),
+      r.pdf.revisions > 1 ? h("p", { class: "muted" }, "Multiple revisions: older versions of the content may still be inside the file.") : null));
+  }
+  if (r.zip) {
+    parts.push(h("div", { class: "panel" }, h("h3", {}, `ZIP archive in ${r.zip.where} (${r.zip.entries.length} entries${r.zip.encrypted ? ", password-protected" : ""})`),
+      r.zip.comment ? h("div", { class: "notice" }, "Archive comment: ", h("code", {}, r.zip.comment)) : null,
+      Object.keys(r.zip.office).length ? [h("h4", {}, "Office document properties"), kv(r.zip.office)] : null,
+      h("div", { class: "table-wrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, ["Name", "Size", "Modified", ""].map((x) => h("th", {}, x)))),
+        h("tbody", {}, r.zip.entries.slice(0, 300).map((e) => h("tr", {},
+          h("td", { class: "mono" }, highlightFlags(e.name, r.flags)), h("td", {}, fileSize(e.size)), h("td", {}, e.modified),
+          h("td", {}, e.encrypted ? h("span", { class: "tag warn" }, "encrypted") : null))))))));
+  }
+  if (r.binary) parts.push(h("div", { class: "panel" }, h("h3", {}, "Executable"), kv(r.binary)));
+  if (!parts.length) parts.push(h("div", { class: "panel" }, h("div", { class: "empty" }, "No format-specific metadata for this file type.")));
+  return h("div", {}, parts);
+}
+
+function fileStego(r) {
+  const top = r.lsb.candidates;
+  return h("div", {},
+    h("div", { class: "panel" }, h("h3", {}, "Least-significant-bit extraction"),
+      h("p", { class: "muted" }, "Hidden messages often live in the lowest bit of each colour value. These are the extraction orders that produced the most readable output."),
+      h("div", { class: "table-wrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, ["Channels", "Bit", "Order", "Readable text", "Starts with"].map((x) => h("th", {}, x)))),
+        h("tbody", {}, top.map((c) => h("tr", { class: c.flags.length ? "flag-row-hit" : "" },
+          h("td", {}, c.channels), h("td", {}, c.bit), h("td", {}, c.order),
+          h("td", {}, c.text_prefix >= 6 ? `${c.text_prefix} chars` : `${Math.round(c.printable * 100)}%`, c.magic ? h("span", { class: "tag note" }, c.magic) : null),
+          h("td", { class: "mono lsb-preview" }, highlightFlags(c.preview.replace(/[^\x20-\x7e]/g, "·"), c.flags)))))))),
+    h("div", { class: "panel" }, h("h3", {}, "Bit planes"),
+      h("p", { class: "muted" }, "White = bit set. Text or shapes visible in a plane mean something was hidden there."),
+      h("div", { class: "planes" }, r.lsb.planes.map((p) => h("figure", {},
+        h("img", { src: `data:image/png;base64,${p.png}`, alt: `${p.channel} channel bit ${p.bit}` }),
+        h("figcaption", {}, `${p.channel} · bit ${p.bit}`))))));
+}
+
 /* ================================================================== settings */
+
+function flagFormatsPanel(s) {
+  const box = h("textarea", { class: "lab-input mono", rows: "5", spellcheck: "false", "aria-label": "Flag formats, one per line" });
+  box.value = (s.flag_formats || []).join("\n");
+  const generic = h("input", { type: "checkbox", checked: s.flag_generic });
+  const msg = h("div", { class: "form-error", role: "alert" });
+  const save = async () => {
+    msg.textContent = "";
+    try {
+      const fresh = await api.put("/api/settings", { flag_formats: box.value.split("\n"), flag_generic: generic.checked });
+      state.settings = fresh;
+      box.value = fresh.flag_formats.join("\n");
+      toast("Flag formats saved");
+    } catch (ex) { msg.textContent = ex.message; }
+  };
+  return h("div", { class: "panel" },
+    h("h3", {}, "CTF flag formats"),
+    h("p", { class: "muted" }, "The Lab highlights anything matching these. Write them the way the CTF announces them: ",
+      h("code", {}, "picoCTF{...}"), ". Start a line with ", h("code", {}, "re:"), " for a regular expression."),
+    box,
+    h("label", { class: "toggle inline", style: "margin:10px 0" }, generic, h("span", { class: "switch" }),
+      h("span", {}, "Also flag anything shaped like xyz{…} as a possible flag")),
+    h("div", {}, h("button", { class: "btn btn-primary", type: "button", onclick: save }, "Save formats")),
+    msg);
+}
 
 async function showSettings() {
   render(h("div", { class: "empty" }, h("span", { class: "spinner", style: "display:inline-block" })));
@@ -1917,6 +2327,7 @@ async function showSettings() {
         h("button", { class: "btn btn-primary", type: "submit" }, "Save key"),
         s.hibp_key_source === "settings" ? h("button", { class: "btn btn-danger", type: "button", onclick: () => save(null) }, "Remove") : null),
       msg),
+    flagFormatsPanel(s),
     h("div", { class: "panel" },
       h("h3", {}, "Privacy"),
       h("ul", { class: "plain" },

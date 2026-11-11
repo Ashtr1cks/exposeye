@@ -14,14 +14,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+import secrets
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -29,6 +33,9 @@ from pydantic import BaseModel, Field
 
 from exposeye import __version__
 from exposeye.emailcheck import check_email as default_email_check
+from exposeye.lab import decoder as lab_decoder
+from exposeye.lab import files as lab_files
+from exposeye.lab.flags import DEFAULT_FORMATS, FlagHunter, compile_formats
 from exposeye.monitor import task as bg_task
 from exposeye.monitor.diff import diff
 from exposeye.monitor.notify import Notifier, valid_discord_webhook
@@ -141,6 +148,15 @@ class SettingsUpdate(BaseModel):
     hibp_api_key: str | None = Field(None, max_length=200)
     discord_webhook: str | None = Field(None, max_length=300)
     desktop_notify: bool | None = None
+    flag_formats: list[str] | None = Field(None, max_length=50)
+    flag_generic: bool | None = None
+
+
+class DecodeRequest(BaseModel):
+    input: str = Field(..., max_length=lab_decoder.MAX_INPUT)
+    depth: int = Field(4, ge=1, le=6)
+    caesar: bool = True
+    xor: bool = True
 
 
 class WatchAdd(BaseModel):
@@ -238,6 +254,8 @@ def create_app(
             "discord_webhook_set": bool(hook),
             "discord_webhook_masked": mask(hook.rsplit("/", 1)[-1]) if hook else None,
             "desktop_notify": bool(settings.get("desktop_notify", True)),
+            "flag_formats": settings.get("flag_formats", DEFAULT_FORMATS),
+            "flag_generic": bool(settings.get("flag_generic", True)),
             "data_dir": str(store.root),
         }
 
@@ -257,7 +275,87 @@ def create_app(
             settings.set("discord_webhook", hook or None)
         if "desktop_notify" in given and update.desktop_notify is not None:
             settings.set("desktop_notify", update.desktop_notify)
+        if "flag_formats" in given and update.flag_formats is not None:
+            formats = [f.strip()[:200] for f in update.flag_formats if f.strip()]
+            try:
+                compile_formats(formats)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            settings.set("flag_formats", formats or DEFAULT_FORMATS)
+        if "flag_generic" in given and update.flag_generic is not None:
+            settings.set("flag_generic", update.flag_generic)
         return get_settings()
+
+    # ------------------------------------------------------------------ lab (CTF tools)
+
+    def hunter() -> FlagHunter:
+        return FlagHunter(
+            settings.get("flag_formats", DEFAULT_FORMATS), bool(settings.get("flag_generic", True))
+        )
+
+    # Recently analysed files, held in memory only (never written to disk) for extract/repair.
+    uploads: OrderedDict[str, tuple[str, bytes]] = OrderedDict()
+    max_uploads = 4
+
+    def upload(fid: str) -> tuple[str, bytes]:
+        if fid not in uploads:
+            raise HTTPException(404, "File no longer in memory - analyse it again.")
+        return uploads[fid]
+
+    def safe_name(name: str) -> str:
+        name = re.sub(r"[^\w.\-]+", "_", name.replace("\\", "/").rsplit("/", 1)[-1])[:120]
+        return name.strip("._") or "file"
+
+    @app.post("/api/lab/decode")
+    def lab_decode(req: DecodeRequest):
+        return lab_decoder.decode(req.input, hunter(), req.depth, req.caesar, req.xor)
+
+    @app.post("/api/lab/files")
+    async def lab_analyse(request: Request, name: str = "upload"):
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > lab_files.MAX_FILE:
+                raise HTTPException(
+                    413, f"Files up to {lab_files.MAX_FILE // 1048576} MB are supported."
+                )
+        if not body:
+            raise HTTPException(400, "The file is empty.")
+        data = bytes(body)
+        fid = secrets.token_hex(8)
+        uploads[fid] = (safe_name(name), data)
+        while len(uploads) > max_uploads:
+            uploads.popitem(last=False)
+        result = await run_in_threadpool(lab_files.analyse, data, name[:200], hunter())
+        result["id"] = fid
+        return result
+
+    @app.get("/api/lab/files/{fid}/extract")
+    def lab_extract(fid: str, start: int = 0, end: int | None = None):
+        name, data = upload(fid)
+        end = len(data) if end is None else min(end, len(data))
+        if not 0 <= start < end:
+            raise HTTPException(400, "Invalid range.")
+        chunk = data[start:end]
+        kind = (lab_files.identify(chunk) or {}).get("type") or "bin"
+        out = f"{name.rsplit('.', 1)[0]}_offset{start:x}.{kind}"
+        return Response(
+            chunk,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{out}"'},
+        )
+
+    @app.get("/api/lab/files/{fid}/fixed-png")
+    def lab_fixed_png(fid: str, width: int, height: int):
+        name, data = upload(fid)
+        if not data.startswith(b"\x89PNG") or not (0 < width <= 65535 and 0 < height <= 65535):
+            raise HTTPException(400, "Not a PNG, or invalid size.")
+        out = f"{name.rsplit('.', 1)[0]}_fixed_{width}x{height}.png"
+        return Response(
+            lab_files.fixed_png(data, width, height),
+            media_type="image/png",
+            headers={"Content-Disposition": f'attachment; filename="{out}"'},
+        )
 
     @app.post("/api/notify/test")
     def notify_test():

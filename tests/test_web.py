@@ -137,3 +137,50 @@ def test_bundled_graph_library_is_served(client):
         "MIT" in client.get("/static/vendor/cytoscape.LICENSE.txt").text
         or "Permission is hereby granted" in client.get("/static/vendor/cytoscape.LICENSE.txt").text
     )
+
+
+def test_lab_api(client):
+    import base64
+    import io
+    import struct
+
+    from PIL import Image
+
+    r = client.post(
+        "/api/lab/decode", json={"input": base64.b64encode(b"flag{api_works}").decode()}
+    )
+    assert r.status_code == 200 and r.json()["flags"][0]["value"] == "flag{api_works}"
+
+    # custom flag format via settings
+    assert client.put("/api/settings", json={"flag_formats": ["myctf{...}"]}).status_code == 200
+    r = client.post("/api/lab/decode", json={"input": base64.b64encode(b"myctf{custom}").decode()})
+    assert [f["value"] for f in r.json()["flags"]] == ["myctf{custom}"]
+    assert client.put("/api/settings", json={"flag_formats": ["re:([bad"]}).status_code == 400
+
+    # upload a PNG with a tampered height and data appended after IEND
+    img = Image.new("RGB", (20, 40), (0, 0, 0))
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    data = bytearray(buf.getvalue())
+    data[20:24] = struct.pack(">I", 10)
+    data += b"myctf{after_iend}"
+    up = client.post("/api/lab/files?name=../../evil name.png", content=bytes(data))
+    assert up.status_code == 200
+    res = up.json()
+    assert res["png"]["fixed_size"]["height"] == 40
+    assert "myctf{after_iend}" in [f["value"] for f in res["flags"]]
+
+    ex = client.get(
+        f"/api/lab/files/{res['id']}/extract", params={"start": res["trailing"]["offset"]}
+    )
+    assert ex.content == b"myctf{after_iend}"
+    assert (
+        "evil_name_offset" in ex.headers["content-disposition"]
+        and ".." not in ex.headers["content-disposition"]
+    )
+
+    fixed = client.get(f"/api/lab/files/{res['id']}/fixed-png", params={"width": 20, "height": 40})
+    assert Image.open(io.BytesIO(fixed.content)).size == (20, 40)
+
+    assert client.get("/api/lab/files/nope/extract").status_code == 404
+    assert client.post("/api/lab/files?name=x", content=b"").status_code == 400
