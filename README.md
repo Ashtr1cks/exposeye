@@ -77,6 +77,48 @@ It opens in its own window (via [pywebview](https://pywebview.flowrl.com/)), or 
 if pywebview isn't installed or you pass `--browser`. The server only listens on `127.0.0.1` and
 rejects requests with any other `Host` header, which blocks DNS-rebinding attacks.
 
+## Monitoring
+
+A single scan is a snapshot; monitoring tells you **what changed**. Add domains you own (and
+your own email addresses) to the watchlist, and domainscope re-checks them daily or weekly. Each
+new scan is compared with the previous one, changes are recorded in a timeline, and you're
+alerted when something gets worse.
+
+Detected changes include:
+- New or vanished live hosts, with "interesting" names like `admin` or `vpn` flagged
+- New dangling CNAMEs (subdomain takeover risk)
+- NS/MX changes, DNSSEC turned off, and a weaker SPF/DMARC policy
+- Registrar change, domain on hold, or registration expiring within 30 days
+- TLS certificates becoming invalid or crossing 30 and 7 days to expiry
+- Security headers removed and new version leaks
+- For emails: new breaches, highlighting any with exposed passwords
+
+Improvements (DMARC strengthened, certificate renewed, header added) are recorded too, but don't
+trigger alerts. The engine only compares what both scans actually measured: if crt.sh is down
+or a check was switched off, that area is skipped rather than reported as "47 subdomains
+disappeared".
+
+**Alerts:** Windows desktop notifications, and optionally a Discord webhook, so alerts reach your
+phone too.
+
+**When checks run:**
+- **While the app is open:** due items are checked automatically every minute.
+- **In the background (Windows):** one click on the Monitoring page registers an hourly Task
+  Scheduler job. It runs `domainscope-watch run --quiet` with `pythonw` (no window) and only
+  scans items that are due, so it catches up after the PC was off. On macOS/Linux, put the same
+  command in cron.
+
+Any result page also has **What changed** (compare with the previous scan of the same target)
+and **Watch** (start monitoring, using that scan as the baseline).
+
+```bash
+domainscope-watch add example.com --weekly --full
+domainscope-watch add me@example.com
+domainscope-watch run            # scan whatever is due
+domainscope-watch changes        # recent change timeline
+domainscope-watch install-task   # hourly background checks (Windows)
+```
+
 ## The CLI
 
 ```text
@@ -174,7 +216,15 @@ src/domainscope/
 ├── email_cli.py        # email/password CLI
 ├── scanner.py          # domain scan: runs modules, aggregates findings
 ├── emailcheck.py       # email check: breaches, domain, profile, advice
-├── settings.py         # ~/.domainscope/settings.json (optional HIBP key)
+├── watch_cli.py        # monitoring CLI (used by the scheduled task)
+├── settings.py         # ~/.domainscope/settings.json (HIBP key, alert settings)
+├── storage.py          # scan history + cross-process file lock
+├── monitor/
+│   ├── diff.py         # "what changed" engine (domain + email)
+│   ├── watchlist.py    # watchlist + change timeline
+│   ├── runner.py       # run due items, diff, record, alert
+│   ├── notify.py       # Windows toast + Discord webhook
+│   └── task.py         # Windows Task Scheduler integration
 ├── report.py           # JSON / Markdown / HTML rendering
 ├── templates/          # Jinja2 report templates (HTML is self-contained)
 └── modules/
@@ -207,7 +257,8 @@ To add a module, write a function that returns plain dicts, add a `findings()` h
 - [ ] Optional API-key sources (SecurityTrails, Shodan, VirusTotal) via env vars
 - [ ] Historical snapshots from the Wayback Machine (`/robots.txt`, old endpoints)
 - [ ] Zone transfer (AXFR) check against each authoritative NS
-- [ ] Diff two JSON reports to spot new subdomains over time
+- [x] Monitoring: scheduled re-scans, change detection, alerts
+- [ ] GitHub Actions template for monitoring (private repos only)
 - [ ] Export findings to CSV / STIX
 
 ## Legal and ethical use

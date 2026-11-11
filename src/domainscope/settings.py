@@ -1,10 +1,14 @@
-"""Small persistent settings file (~/.domainscope/settings.json)."""
+"""Small persistent settings file (~/.domainscope/settings.json).
+
+Shared by the app and the background task, so writes are locked.
+"""
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
+
+from domainscope.storage import FileLock, read_json, write_json
 
 
 def data_dir() -> Path:
@@ -14,38 +18,39 @@ def data_dir() -> Path:
 
 class Settings:
     def __init__(self, root: Path | None = None):
-        self.path = Path(root or data_dir()) / "settings.json"
+        root = Path(root or data_dir())
+        self.path = root / "settings.json"
+        self.lock = root / ".settings.lock"
 
     def _read(self) -> dict:
-        try:
-            return json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return {}
+        data = read_json(self.path, {})
+        return data if isinstance(data, dict) else {}
 
-    def _write(self, data: dict) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        tmp.replace(self.path)
+    def get(self, key: str, default=None):
+        return self._read().get(key, default)
+
+    def set(self, key: str, value) -> None:
+        with FileLock(self.lock):
+            data = self._read()
+            if value is None or value == "":
+                data.pop(key, None)
+            else:
+                data[key] = value
+            write_json(self.path, data, indent=2)
 
     @property
     def hibp_key(self) -> str | None:
         """Environment variable wins over the saved setting."""
-        return os.environ.get("HIBP_API_KEY") or self._read().get("hibp_api_key") or None
+        return os.environ.get("HIBP_API_KEY") or self.get("hibp_api_key") or None
 
     @property
     def hibp_key_source(self) -> str | None:
         if os.environ.get("HIBP_API_KEY"):
             return "environment"
-        return "settings" if self._read().get("hibp_api_key") else None
+        return "settings" if self.get("hibp_api_key") else None
 
     def set_hibp_key(self, key: str | None) -> None:
-        data = self._read()
-        if key:
-            data["hibp_api_key"] = key.strip()
-        else:
-            data.pop("hibp_api_key", None)
-        self._write(data)
+        self.set("hibp_api_key", key.strip() if key else None)
 
 
 def mask(key: str | None) -> str | None:

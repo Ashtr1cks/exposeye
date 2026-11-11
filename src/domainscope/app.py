@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     port = _free_port(args.port)
-    app = create_app(args.data_dir)
+    app = create_app(args.data_dir, scheduler=True)  # runs due watchlist checks while open
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()

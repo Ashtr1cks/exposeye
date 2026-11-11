@@ -42,6 +42,11 @@ const ICONS = {
   external: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5"/>',
   refresh: '<path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  bell: '<path d="M6 8a6 6 0 0112 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 003.4 0"/>',
+  diff: '<path d="M8 3v12M4 7l4-4 4 4M16 21V9M12 17l4 4 4-4"/>',
+  pause: '<path d="M8 5v14M16 5v14"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  send: '<path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/>',
 };
 
 function icon(name) {
@@ -268,15 +273,28 @@ function drawHistory() {
   }
   ul.replaceChildren(...(items.length ? items : [h("li", { class: "history-empty" }, "No scans yet")]));
   document.getElementById("settingsLink").classList.toggle("active", location.hash === "#/settings");
+  document.getElementById("monitorLink").classList.toggle("active", location.hash === "#/monitor");
+}
+
+async function refreshBadge() {
+  try {
+    const s = await api.get("/api/monitor/summary");
+    const badge = document.getElementById("monitorBadge");
+    badge.textContent = s.unread > 99 ? "99+" : String(s.unread);
+    badge.hidden = !s.unread;
+  } catch { /* ignore */ }
 }
 
 /* ================================================================== routing */
 
 function route() {
   closeStream();
+  clearTimeout(state.monitorTimer);
   const [, view, id] = location.hash.split("/");
   if (view === "scan" && id) showResult(id);
   else if (view === "progress" && id) showProgress(id);
+  else if (view === "compare" && id) showCompare(id);
+  else if (view === "monitor") showMonitor();
   else if (view === "settings") showSettings();
   else showNew();
   drawHistory();
@@ -341,34 +359,38 @@ function showNew() {
   const toggles = {};
   const probeOut = h("output", {});
   const probe = h("input", { type: "range", min: "1", max: "100", "aria-label": "Websites to check" });
-  const probeRow = h("div", { class: "range-row" },
+  const probeRow = h("div", { class: "range-row panel-row" },
     h("div", { class: "toggle-text" }, h("strong", {}, "Websites to check"), h("span", {}, "Maximum number of hosts to visit")),
     probe, probeOut);
   const legal = h("div", { class: "legal" });
 
-  const toggle = (key, title, desc) => {
-    const box = h("input", {
-      type: "checkbox",
-      onchange: () => {
-        if (key === "web") opts.passive = !box.checked; else opts[key] = box.checked;
+  // Multi-select feature cards: click to switch each check on/off; selected ones are highlighted.
+  const FEATURES = [
+    ["whois", "id", "Registration details", "Owner/registrar, creation and expiry dates"],
+    ["email", "mail", "Email security", "SPF, DMARC, MTA-STS: can the domain be spoofed?"],
+    ["subdomains", "tree", "Find subdomains", "Search public certificate logs"],
+    ["web", "globe", "Visit websites", "Security headers and TLS certificates (makes the scan active)"],
+  ];
+  const featureCard = ([key, ic, title, desc]) => {
+    const card = h("button", {
+      type: "button", class: "feature", "aria-pressed": "false",
+      onclick: () => {
+        if (key === "web") opts.passive = !opts.passive; else opts[key] = !opts[key];
         taskId = matchDomainTask(opts)?.id || null;
         sync();
       },
-    });
-    toggles[key] = box;
-    return h("label", { class: "toggle" }, box, h("span", { class: "switch" }),
-      h("span", { class: "toggle-text" }, h("strong", {}, title), h("span", {}, desc)));
+    },
+      h("span", { class: "feature-check", "aria-hidden": "true" }),
+      h("span", { class: "task-icon" }, icon(ic)),
+      h("span", { class: "feature-text" }, h("strong", {}, title), h("span", {}, desc)));
+    toggles[key] = card;
+    return card;
   };
+  const customNote = h("span", { class: "opt" });
   const optionsBlock = h("div", {},
-    h("div", { class: "step-title" }, h("span", { class: "step-num" }, "3"), "Fine-tune ", h("span", { class: "opt" }, "(optional)")),
-    h("details", { class: "options" },
-      h("summary", {}, icon("sliders"), "Choose exactly what to check"),
-      h("div", { class: "options-body" },
-        toggle("whois", "Registration details", "Owner/registrar, creation and expiry dates (RDAP)"),
-        toggle("email", "Email security", "SPF, DMARC, MTA-STS: can the domain be spoofed?"),
-        toggle("subdomains", "Find subdomains", "Search public certificate logs (crt.sh, Cert Spotter)"),
-        toggle("web", "Visit websites", "Check security headers and TLS certificates. Turn off for a passive scan."),
-        probeRow)));
+    h("div", { class: "step-title" }, h("span", { class: "step-num" }, "3"), "Choose what to check ", customNote),
+    h("div", { class: "features", role: "group", "aria-label": "Checks to run" }, FEATURES.map(featureCard)),
+    probeRow);
 
   for (const t of TASKS) {
     tasksBox.append(h("label", { class: "task", "data-id": t.id },
@@ -394,7 +416,7 @@ function showNew() {
       input.autocomplete = kind === "email" ? "email" : "off";
       stepTitle.textContent = ui.step;
       runLabel.textContent = ui.run;
-      hint.replaceChildren(ui.hint, ...ui.examples.map((d, i) => [i ? ", " : "",
+      hint.replaceChildren(ui.hint, ...ui.examples.flatMap((d, i) => [i ? ", " : "",
         h("button", { type: "button", onclick: () => { input.value = d; sync(); input.focus(); } }, d)]));
       reveal.hidden = kind !== "password";
       reveal.replaceChildren(icon("eye"));
@@ -412,7 +434,14 @@ function showNew() {
       card.classList.toggle("selected", sel);
       card.querySelector("input").checked = sel;
     }
-    for (const [k, el] of Object.entries(toggles)) el.checked = k === "web" ? !opts.passive : opts[k];
+    for (const [k, el] of Object.entries(toggles)) {
+      const on = k === "web" ? !opts.passive : !!opts[k];
+      el.classList.toggle("selected", on);
+      el.setAttribute("aria-pressed", String(on));
+    }
+    customNote.textContent = kind === "domain" && !taskId
+      ? "(custom selection: click cards to turn checks on or off)"
+      : "(click cards to turn checks on or off)";
     probe.value = String(Math.max(1, opts.probe_limit));
     probeOut.textContent = probe.value;
     probeRow.hidden = opts.passive;
@@ -552,11 +581,32 @@ async function showResult(id) {
     render(h("div", { class: "empty" }, h("h2", {}, "Scan not found"), h("p", {}, ex.message), h("a", { class: "btn", href: "#/" }, "Start a new scan")));
     return;
   }
-  if (r.meta.kind === "email") showEmailResult(r, id);
-  else showDomainResult(r, id);
+  const isEmail = r.meta.kind === "email";
+  const mode = !isEmail && r.meta.options?.passive === false ? "full" : "passive";
+  const wb = await watchButton(isEmail ? "email" : "domain", isEmail ? r.meta.email : r.meta.domain, mode, id);
+  if (isEmail) showEmailResult(r, id, wb);
+  else showDomainResult(r, id, wb);
 }
 
-function actionBar(id, onRescan, rescanLabel) {
+async function watchButton(kind, target, mode, scanId) {
+  let wl = { items: [] };
+  try { wl = await api.get("/api/watchlist"); } catch { /* ignore */ }
+  const existing = wl.items.find((i) => i.kind === kind && i.target === target);
+  if (existing) return h("a", { class: "btn btn-watching", href: "#/monitor" }, icon("bell"), "Watching");
+  const btn = h("button", { class: "btn", type: "button", title: "Re-check on a schedule and alert on changes" }, icon("bell"), "Watch");
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    try {
+      await api.post("/api/watchlist", { target, interval: "daily", mode, baseline_scan_id: scanId });
+      toast(`Watching ${target}. You'll be told when something changes.`);
+      btn.replaceWith(h("a", { class: "btn btn-watching", href: "#/monitor" }, icon("bell"), "Watching"));
+      refreshBadge();
+    } catch (ex) { toast(ex.message); btn.disabled = false; }
+  });
+  return btn;
+}
+
+function actionBar(id, onRescan, rescanLabel, watchBtn) {
   const del = h("button", { class: "btn btn-danger", type: "button" }, icon("trash"), "Delete");
   let armed = false;
   del.addEventListener("click", async () => {
@@ -571,6 +621,8 @@ function actionBar(id, onRescan, rescanLabel) {
     location.hash = "#/";
   });
   return h("div", { class: "actions" },
+    watchBtn,
+    h("a", { class: "btn", href: `#/compare/${id}`, title: "Compare with the previous scan of this target" }, icon("diff"), "What changed"),
     h("a", { class: "btn", href: `/api/scans/${id}/report/html`, target: "_blank", rel: "noopener" }, icon("external"), "Open report"),
     h("a", { class: "btn", href: `/api/scans/${id}/report/html?download=true`, download: "" }, icon("download"), "HTML"),
     h("a", { class: "btn", href: `/api/scans/${id}/report/md?download=true`, download: "" }, icon("download"), "Markdown"),
@@ -613,7 +665,7 @@ function resultHeader(title, metaBits, actions) {
 
 /* ================================================================== domain result */
 
-function showDomainResult(r, id) {
+function showDomainResult(r, id, watchBtn) {
   const o = { ...DEFAULT_OPTS, ...(r.meta.options || {}) };
   const counts = r.summary.findings;
   const http = r.http || [];
@@ -645,7 +697,7 @@ function showDomainResult(r, id) {
     resultHeader(r.meta.domain, [
       h("span", {}, new Date(r.meta.started).toLocaleString()), "·", h("span", {}, `${r.meta.duration_s}s`),
       h("span", { class: `badge ${o.passive ? "" : "accent"}` }, o.passive ? "passive" : "active")],
-    actionBar(id, () => startDomainScan(r.meta.domain, o), "Scan again")),
+    actionBar(id, () => startDomainScan(r.meta.domain, o), "Scan again", watchBtn)),
     verdict,
     h("div", { class: "cards" }, SEVS.map(sevCard),
       h("div", { class: "card" }, h("div", { class: "n" }, r.summary.hosts_live, h("span", { class: "sub" }, ` / ${r.summary.hosts_total}`)), h("div", { class: "l" }, "hosts live")),
@@ -841,7 +893,7 @@ function whoisView(r) {
 
 /* ================================================================== email result */
 
-function showEmailResult(r, id) {
+function showEmailResult(r, id, watchBtn) {
   const s = r.summary;
   const items = r.breaches.items;
   const tabs = [
@@ -871,7 +923,7 @@ function showEmailResult(r, id) {
     resultHeader(r.meta.email, [
       h("span", {}, new Date(r.meta.started).toLocaleString()), "·", h("span", {}, `${r.meta.duration_s}s`),
       h("span", { class: "badge accent" }, `via ${r.breaches.provider}`)],
-    actionBar(id, () => startEmailCheck(r.meta.email), "Check again")),
+    actionBar(id, () => startEmailCheck(r.meta.email), "Check again", watchBtn)),
     verdict,
     h("div", { class: "cards" },
       h("button", { class: "card high", type: "button", onclick: () => t.open("breaches") }, h("div", { class: "n" }, s.breaches), h("div", { class: "l" }, "breaches")),
@@ -981,6 +1033,201 @@ function profileView(r) {
       h("p", { class: "muted", style: "font-size:13px" }, "Anyone who knows this email can see this profile.")));
 }
 
+/* ================================================================== monitoring */
+
+function whenTime(iso) {
+  if (!iso) return "";
+  const s = (new Date(iso).getTime() - Date.now()) / 1000;
+  if (s <= 60) return "any minute";
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (s < 3600) return rtf.format(Math.round(s / 60), "minute");
+  if (s < 86400) return rtf.format(Math.round(s / 3600), "hour");
+  return rtf.format(Math.round(s / 86400), "day");
+}
+
+function changeRow(c) {
+  const label = c.improvement ? "improved" : c.severity;
+  return h("div", { class: `change ${c.improvement ? "good" : `sev-${c.severity}`}` },
+    h("span", { class: `pill ${c.improvement ? "good" : c.severity}` }, label),
+    h("div", {},
+      h("div", { class: "finding-title" }, c.title),
+      c.detail ? h("div", { class: "finding-detail mono" }, c.detail) : null),
+    h("span", { class: "module" }, c.category));
+}
+
+function changeList(changes, limit) {
+  const box = h("div", { class: "changes" });
+  const draw = (n) => {
+    const rows = changes.slice(0, n).map(changeRow);
+    if (changes.length > n) {
+      rows.push(h("button", { type: "button", class: "btn btn-ghost more", onclick: () => draw(changes.length) },
+        `Show all ${changes.length} changes`));
+    }
+    box.replaceChildren(...rows);
+  };
+  draw(limit || changes.length);
+  return box;
+}
+
+async function showMonitor() {
+  render(h("div", { class: "empty" }, h("span", { class: "spinner", style: "display:inline-block" })));
+  let wl, ch, bg, st;
+  try {
+    [wl, ch, bg, st] = await Promise.all([api.get("/api/watchlist"), api.get("/api/changes?limit=100"),
+      api.get("/api/monitor/background"), api.get("/api/settings")]);
+  } catch (ex) { render(h("div", { class: "empty" }, ex.message)); return; }
+  const unreadIds = new Set(ch.events.filter((e) => !e.read).map((e) => e.id));
+  if (unreadIds.size) api.post("/api/changes/read").then(refreshBadge).catch(() => {});
+
+  /* --- add form --- */
+  const target = h("input", { type: "text", class: "domain-input", placeholder: "example.com or you@example.com", spellcheck: "false", autocomplete: "off", "aria-label": "Domain or email to watch" });
+  const interval = h("select", { "aria-label": "How often" }, h("option", { value: "daily" }, "Every day"), h("option", { value: "weekly" }, "Every week"));
+  const mode = h("select", { "aria-label": "Scan type" }, h("option", { value: "passive" }, "Passive (public data only)"), h("option", { value: "full" }, "Full (also visits websites)"));
+  const err = h("div", { class: "form-error", role: "alert" });
+  target.addEventListener("input", () => { mode.hidden = target.value.includes("@"); err.textContent = ""; });
+  const addForm = h("form", { class: "watch-add", onsubmit: async (e) => {
+    e.preventDefault();
+    if (!target.value.trim()) { err.textContent = "Type a domain or email first."; return; }
+    try {
+      const item = await api.post("/api/watchlist", { target: target.value.trim(), interval: interval.value, mode: mode.value });
+      toast(`Watching ${item.target}. Taking the first snapshot now…`);
+      try { await api.post(`/api/watchlist/${item.id}/run`); } catch (ex) { toast(ex.message); }
+      loadHistory();
+      showMonitor();
+    } catch (ex) { err.textContent = ex.message; }
+  } }, target, interval, mode, h("button", { class: "btn btn-primary", type: "submit" }, icon("plus"), "Watch"));
+
+  /* --- watchlist --- */
+  const anyRunning = wl.items.some((i) => i.running);
+  const watchRows = wl.items.map((i) => {
+    const status = !i.enabled ? h("span", { class: "tag" }, "paused")
+      : i.running ? h("span", { class: "tag note" }, "checking…")
+      : i.last_error ? h("span", { class: "tag warn", title: i.last_error }, "last check failed")
+      : !i.last_run ? h("span", { class: "tag" }, "waiting for first check")
+      : i.last_change_count ? h("span", { class: "tag note" }, `${i.last_change_count} change(s)`)
+      : h("span", { class: "tag good" }, "no changes");
+    const del = h("button", { class: "btn btn-ghost btn-sm btn-danger", type: "button", title: "Stop watching" }, icon("trash"));
+    let armed = false;
+    del.addEventListener("click", async () => {
+      if (!armed) { armed = true; del.classList.add("confirm"); del.title = "Click again to stop watching"; toast("Click again to stop watching"); setTimeout(() => { armed = false; del.classList.remove("confirm"); }, 3000); return; }
+      await api.del(`/api/watchlist/${i.id}`); toast(`Stopped watching ${i.target}`); refreshBadge(); showMonitor();
+    });
+    return h("tr", {},
+      h("td", {}, h("div", { class: "watch-target" }, icon(i.kind === "email" ? "mail" : "globe"),
+        i.last_scan_id ? h("a", { href: `#/scan/${i.last_scan_id}`, class: "mono" }, i.target) : h("span", { class: "mono" }, i.target))),
+      h("td", {}, i.interval === "daily" ? "Daily" : "Weekly", i.kind === "domain" ? h("span", { class: "muted" }, ` · ${i.mode}`) : null),
+      h("td", {}, i.last_run_iso ? relTime(i.last_run_iso) : "—"),
+      h("td", {}, i.enabled ? (i.running ? "now" : whenTime(i.next_due)) : "—"),
+      h("td", {}, status),
+      h("td", { class: "row-actions" },
+        h("button", { class: "btn btn-ghost btn-sm", type: "button", title: "Check now", disabled: i.running || !i.enabled,
+          onclick: async () => { try { await api.post(`/api/watchlist/${i.id}/run`); toast(`Checking ${i.target}…`); loadHistory(); showMonitor(); } catch (ex) { toast(ex.message); } } }, icon("refresh")),
+        h("button", { class: "btn btn-ghost btn-sm", type: "button", title: i.enabled ? "Pause" : "Resume",
+          onclick: async () => { await api.req("PATCH", `/api/watchlist/${i.id}`, { enabled: !i.enabled }); showMonitor(); } }, icon(i.enabled ? "pause" : "play")),
+        del));
+  });
+
+  /* --- background task --- */
+  const bgBtn = h("button", { class: `btn ${bg.installed ? "btn-danger" : "btn-primary"}`, type: "button" }, bg.installed ? "Turn off" : "Turn on background checks");
+  bgBtn.addEventListener("click", async () => {
+    bgBtn.disabled = true;
+    try { await api.post("/api/monitor/background", { enabled: !bg.installed }); toast(bg.installed ? "Background checks turned off" : "Background checks turned on"); showMonitor(); }
+    catch (ex) { toast(ex.message); bgBtn.disabled = false; }
+  });
+  const bgPanel = h("div", { class: "panel" }, h("h3", {}, "Background checks"),
+    !bg.supported
+      ? [h("p", { class: "muted" }, "Automatic background checks use Windows Task Scheduler. On macOS/Linux, add this to cron (hourly):"), h("code", {}, bg.command)]
+      : bg.installed
+        ? [h("div", { class: "verdict good" }, "On. Windows checks every hour for anything that's due, even when this app is closed (while you're signed in)."),
+          h("p", { class: "muted" }, `Next run: ${bg.next_run || "?"} · Last run: ${bg.last_run || "never"}`), bgBtn]
+        : [h("div", { class: "verdict warn" }, "Off. Checks only run while this app is open."),
+          h("p", { class: "muted" }, "Turn this on to let Windows Task Scheduler run due checks every hour in the background. No window pops up; you get a notification only when something changes."), bgBtn]);
+
+  /* --- alerts --- */
+  const desk = h("input", { type: "checkbox", checked: st.desktop_notify });
+  desk.addEventListener("change", async () => { await api.put("/api/settings", { desktop_notify: desk.checked }); toast(desk.checked ? "Desktop notifications on" : "Desktop notifications off"); });
+  const hook = h("input", { type: "password", placeholder: st.discord_webhook_set ? `Saved (…${st.discord_webhook_masked})` : "https://discord.com/api/webhooks/…", autocomplete: "off", spellcheck: "false", "aria-label": "Discord webhook URL" });
+  const hookErr = h("div", { class: "form-error", role: "alert" });
+  const alertsPanel = h("div", { class: "panel" }, h("h3", {}, "Alerts"),
+    h("p", { class: "muted" }, "You're alerted only when something changes for the worse (new hosts, weaker email security, expiring certificates, new breaches…). Improvements show in the timeline quietly."),
+    h("label", { class: "toggle inline", style: "margin:6px 0 14px" }, desk, h("span", { class: "switch" }), h("span", {}, "Windows desktop notifications")),
+    h("div", { class: "toggle-text" }, h("strong", {}, "Discord alerts (optional)"),
+      h("span", {}, "In Discord: Server settings → Integrations → Webhooks → New webhook → Copy URL. Alerts then reach your phone too.")),
+    h("form", { class: "domain-row", style: "margin-top:8px", onsubmit: async (e) => {
+      e.preventDefault(); hookErr.textContent = "";
+      try { await api.put("/api/settings", { discord_webhook: hook.value.trim() }); toast("Discord webhook saved"); showMonitor(); }
+      catch (ex) { hookErr.textContent = ex.message; }
+    } }, hook, h("button", { class: "btn btn-primary", type: "submit" }, "Save"),
+      st.discord_webhook_set ? h("button", { class: "btn btn-danger", type: "button", onclick: async () => { await api.put("/api/settings", { discord_webhook: null }); toast("Discord webhook removed"); showMonitor(); } }, "Remove") : null),
+    hookErr,
+    h("button", { class: "btn", type: "button", style: "margin-top:10px", onclick: async (e) => {
+      const b = e.currentTarget; b.disabled = true;
+      try {
+        const res = await api.post("/api/notify/test");
+        toast(Object.entries(res).map(([k, v]) => `${k}: ${v.ok ? "sent" : v.message}`).join(" · "));
+      } catch (ex) { toast(ex.message); }
+      b.disabled = false;
+    } }, icon("send"), "Send a test alert"));
+
+  /* --- timeline --- */
+  const timeline = ch.events.length ? ch.events.map((ev) => h("article", { class: `event ${unreadIds.has(ev.id) ? "unread" : ""}` },
+    h("div", { class: "event-head" },
+      h("div", { class: "watch-target" }, icon(ev.kind === "email" ? "mail" : "globe"), h("strong", { class: "mono" }, ev.target)),
+      h("span", { class: "muted" }, relTime(ev.at)),
+      ev.baseline ? h("span", { class: "tag" }, "first snapshot")
+        : h("span", { class: `tag ${ev.changes.some((c) => !c.improvement && c.severity !== "info") ? "note" : "good"}` }, plural(ev.changes.length, "change")),
+      unreadIds.has(ev.id) ? h("span", { class: "tag accent-tag" }, "new") : null,
+      h("span", { class: "event-links" },
+        h("a", { href: `#/scan/${ev.scan_id}` }, "View scan"),
+        ev.previous_id ? h("a", { href: `#/compare/${ev.scan_id}` }, "Compare") : null)),
+    ev.baseline ? h("p", { class: "muted", style: "margin:6px 0 0" }, "Baseline saved. Future checks are compared with this snapshot.")
+      : changeList(ev.changes, 5)))
+    : [h("div", { class: "empty" }, "No changes yet. They'll show up here after watched items are re-checked.")];
+
+  render(h("section", { class: "monitor" },
+    h("div", { class: "hero" }, h("h1", {}, "Monitoring"),
+      h("p", {}, "Watch domains you own and your own email addresses. domainscope re-checks them on a schedule and tells you what changed.")),
+    h("div", { class: "panel" }, h("h3", {}, "Watch something new"), addForm, err),
+    h("div", { class: "panel" }, h("h3", {}, `Watchlist (${wl.items.length})`),
+      wl.items.length ? h("div", { class: "table-wrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, ["Target", "Every", "Last check", "Next check", "Status", ""].map((x) => h("th", {}, x)))),
+        h("tbody", {}, watchRows)))
+        : h("div", { class: "empty" }, "Nothing watched yet. Add a domain above, or press Watch on any scan result.")),
+    h("div", { class: "monitor-grid" }, bgPanel, alertsPanel),
+    h("h2", { class: "section-title" }, "Recent changes"),
+    h("div", { class: "timeline" }, timeline)));
+
+  if (anyRunning) state.monitorTimer = setTimeout(() => { if (location.hash === "#/monitor") showMonitor(); }, 4000);
+}
+
+async function showCompare(id) {
+  render(h("div", { class: "empty" }, h("span", { class: "spinner", style: "display:inline-block" })));
+  let d;
+  try { d = await api.get(`/api/scans/${id}/diff`); }
+  catch (ex) { render(h("div", { class: "empty" }, h("h2", {}, "Can't compare"), h("p", {}, ex.message))); return; }
+  const back = h("a", { class: "btn", href: `#/scan/${id}` }, "Back to scan");
+  const head = h("div", { class: "result-head" },
+    h("div", {}, h("h1", {}, `What changed: ${d.target}`),
+      h("div", { class: "result-meta" }, d.previous
+        ? [h("span", {}, new Date(d.previous.started).toLocaleString()), "→", h("span", {}, new Date(d.current.started).toLocaleString())]
+        : h("span", {}, "No earlier scan to compare with"))),
+    h("div", { class: "actions" }, back));
+  if (!d.previous) {
+    render(h("section", {}, head, h("div", { class: "panel" }, h("div", { class: "empty" },
+      `This is the first scan of ${d.target}, so there's nothing to compare yet. Scan it again later, or press Watch to have it re-checked automatically.`))));
+    return;
+  }
+  const bad = d.changes.filter((c) => !c.improvement && c.severity !== "info").length;
+  const good = d.changes.filter((c) => c.improvement).length;
+  const verdict = !d.changes.length ? h("div", { class: "verdict good" }, "Nothing changed between these two scans.")
+    : bad ? h("div", { class: "verdict warn" }, `${plural(d.changes.length, "change")}: ${bad} need attention${good ? `, ${good} improved` : ""}.`)
+    : h("div", { class: "verdict good" }, `${plural(d.changes.length, "change")}, none of them problems${good ? ` (${good} improved)` : ""}.`);
+  render(h("section", {}, head, verdict, d.changes.length ? changeList(d.changes) : null,
+    h("p", { class: "muted", style: "margin-top:16px;font-size:13px" },
+      "Only areas measured in both scans are compared. If a data source failed or a check was switched off in either scan, that area is skipped rather than reported as removed."),
+    h("a", { class: "btn", href: `#/scan/${d.previous.id}` }, "Open the earlier scan")));
+}
+
 /* ================================================================== settings */
 
 async function showSettings() {
@@ -1041,5 +1288,7 @@ async function showSettings() {
   } catch { /* ignore */ }
   await loadHistory();
   route();
+  refreshBadge();
   setInterval(() => { if (state.running.length) loadHistory(); }, 4000);
+  setInterval(refreshBadge, 20000);
 })();
