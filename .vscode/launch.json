@@ -1,0 +1,30 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "domainscope: scan a domain",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "domainscope",
+      "args": ["${input:domain}", "--open"],
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "domainscope: passive scan",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "domainscope",
+      "args": ["${input:domain}", "--passive", "--open"],
+      "console": "integratedTerminal"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "domain",
+      "type": "promptString",
+      "description": "Domain to scan",
+      "default": "example.com"
+    }
+  ]
+}
