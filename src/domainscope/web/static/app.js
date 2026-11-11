@@ -42,6 +42,7 @@ const ICONS = {
   external: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5"/>',
   refresh: '<path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
   bell: '<path d="M6 8a6 6 0 0112 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 003.4 0"/>',
   diff: '<path d="M8 3v12M4 7l4-4 4 4M16 21V9M12 17l4 4 4-4"/>',
   pause: '<path d="M8 5v14M16 5v14"/>',
@@ -127,7 +128,7 @@ const api = {
 
 /* ================================================================== tasks */
 
-const DEFAULT_OPTS = { whois: true, email: true, subdomains: true, passive: false, probe_limit: 25 };
+const DEFAULT_OPTS = { whois: true, email: true, subdomains: true, exposure: true, passive: false, probe_limit: 25 };
 
 const TASKS = [
   { id: "full", kind: "domain", icon: "radar", title: "Full recon", badge: "Recommended",
@@ -136,16 +137,19 @@ const TASKS = [
     desc: "Public sources only. Never connects to the domain's own servers.", opts: { passive: true } },
   { id: "emailsec", kind: "domain", icon: "mail", title: "Email spoofing check",
     desc: "Can someone send fake email as this domain? Checks SPF, DMARC and MTA-STS.",
-    opts: { whois: false, subdomains: false, passive: true } },
+    opts: { whois: false, subdomains: false, exposure: false, passive: true } },
   { id: "subs", kind: "domain", icon: "tree", title: "Find subdomains",
     desc: "Lists hostnames from public certificate logs and flags takeover risks.",
+    opts: { whois: false, email: false, exposure: false, passive: true } },
+  { id: "ports", kind: "domain", icon: "server", title: "Open ports & vulnerabilities", badge: "New",
+    desc: "Exposed services (RDP, databases…) and known CVEs on every IP, from Shodan's public data.",
     opts: { whois: false, email: false, passive: true } },
   { id: "web", kind: "domain", icon: "lock", title: "Website security check",
     desc: "Security headers, TLS certificate and server versions for the main site.",
-    opts: { whois: false, email: false, subdomains: false, probe_limit: 2 } },
+    opts: { whois: false, email: false, subdomains: false, exposure: false, probe_limit: 2 } },
   { id: "owner", kind: "domain", icon: "id", title: "Who owns it?",
     desc: "Registrar, creation and expiry dates, name servers and abuse contact.",
-    opts: { email: false, subdomains: false, passive: true } },
+    opts: { email: false, subdomains: false, exposure: false, passive: true } },
   { id: "exposure", kind: "email", icon: "shieldMail", title: "Email exposure check", badge: "New",
     desc: "Which data breaches include this email, and were passwords leaked?", opts: {} },
   { id: "password", kind: "password", icon: "key", title: "Has my password leaked?",
@@ -163,7 +167,7 @@ const KIND_UI = {
 
 const taskById = (id) => TASKS.find((t) => t.id === id);
 const taskOpts = (t) => ({ ...DEFAULT_OPTS, ...t.opts });
-const sameOpts = (a, b) => ["whois", "email", "subdomains", "passive"].every((k) => a[k] === b[k])
+const sameOpts = (a, b) => ["whois", "email", "subdomains", "exposure", "passive"].every((k) => !!a[k] === !!b[k])
   && (a.passive || a.probe_limit === b.probe_limit);
 const matchDomainTask = (opts) => TASKS.find((t) => t.kind === "domain" && sameOpts(taskOpts(t), opts));
 
@@ -173,6 +177,7 @@ function buildCommand(domain, o) {
   if (!o.whois) parts.push("--no-whois");
   if (!o.email) parts.push("--no-email");
   if (!o.subdomains) parts.push("--no-subdomains");
+  if (o.exposure === false) parts.push("--no-exposure");
   if (!o.passive && o.probe_limit !== 25) parts.push(`--probe-limit ${o.probe_limit}`);
   return parts.join(" ");
 }
@@ -180,7 +185,7 @@ function buildCommand(domain, o) {
 function expectedSteps(job) {
   if (job.kind === "email") return 3;
   const o = { ...DEFAULT_OPTS, ...(job.options || {}) };
-  return (o.whois ? 1 : 0) + 1 + (o.email ? 1 : 0) + (o.subdomains ? 1 : 0) + 2 + (o.passive ? 1 : 2);
+  return (o.whois ? 1 : 0) + 1 + (o.email ? 1 : 0) + (o.subdomains ? 1 : 0) + 2 + (o.exposure ? 1 : 0) + (o.passive ? 1 : 2);
 }
 
 /* plain-English explanations for findings */
@@ -215,6 +220,15 @@ const EXPLAIN = [
   [/^Wildcard DNS/, "Every subdomain resolves, even made-up ones. domainscope marks those hosts so they aren't mistaken for real systems."],
   [/^Recently registered/, "Newly registered domains are often used for phishing. Be careful if this isn't a domain you recognise."],
   [/^Domain registration expires soon/, "If the registration lapses, anyone could register the domain and take over its email and website."],
+  [/^(RDP|SMB|NetBIOS|VNC|Telnet) \(port/, "Remote-access and file-sharing services are among the most attacked things on the internet: brute-forced passwords and wormable bugs (like WannaCry on SMB) lead straight to ransomware. Put them behind a VPN or firewall."],
+  [/^(MySQL|PostgreSQL|Microsoft SQL Server|Oracle DB|MongoDB|Redis|Elasticsearch|Memcached) \(port/, "Databases should never be reachable from the internet. Exposed ones are scanned within hours and frequently have weak or no passwords, leading to data theft or ransom."],
+  [/^Docker API/, "An unauthenticated Docker API lets anyone run containers on the host, which is effectively full control of the machine."],
+  [/^(FTP|SNMP|LDAP|Microsoft RPC|Kibana|WinRM.*) \(port/, "This service leaks information or credentials, or offers an attack path when exposed. Restrict it to internal networks or a VPN."],
+  [/^Known-exploited vulnerabilities/, "These CVEs are on CISA's Known Exploited Vulnerabilities list: attackers are using them in real attacks right now. They should be patched first, before anything else."],
+  [/^Vulnerabilities likely to be exploited/, "EPSS estimates at least a 50% chance of exploitation in the next 30 days. Verify the version and patch soon. (CVEs are inferred from version banners, so some may already be fixed by backported patches.)"],
+  [/^Vulnerabilities with elevated exploit risk/, "EPSS estimates a 10–50% chance of exploitation in the next 30 days. Worth checking after the urgent ones."],
+  [/^Other reported vulnerabilities/, "Lower-risk CVEs matched to this software version. Keep the software updated; these rarely need emergency action."],
+  [/^End-of-life software/, "The vendor no longer ships security fixes for this software, so new vulnerabilities will never be patched. Plan an upgrade."],
   [/^Password exposed in readable/, "These sites stored passwords in plain text or with weak hashing, so attackers can read or quickly crack them. Anyone who reused that password elsewhere is at real risk of account takeover."],
   [/^Password hash exposed/, "The sites stored passwords as hashes. Strong hashes are slow to crack but weak or common passwords can still be recovered. Changing them is the safe move."],
   [/^Sensitive personal or financial data/, "Financial or identity data can be used for fraud or identity theft. Watch your accounts and consider credit monitoring."],
@@ -290,8 +304,8 @@ async function refreshBadge() {
 function route() {
   closeStream();
   clearTimeout(state.monitorTimer);
-  const [, view, id] = location.hash.split("/");
-  if (view === "scan" && id) showResult(id);
+  const [, view, id, sub] = location.hash.split("/");
+  if (view === "scan" && id) showResult(id, sub);
   else if (view === "progress" && id) showProgress(id);
   else if (view === "compare" && id) showCompare(id);
   else if (view === "monitor") showMonitor();
@@ -369,6 +383,7 @@ function showNew() {
     ["whois", "id", "Registration details", "Owner/registrar, creation and expiry dates"],
     ["email", "mail", "Email security", "SPF, DMARC, MTA-STS: can the domain be spoofed?"],
     ["subdomains", "tree", "Find subdomains", "Search public certificate logs"],
+    ["exposure", "server", "Open ports & CVEs", "Exposed services and known vulnerabilities per IP (passive)"],
     ["web", "globe", "Visit websites", "Security headers and TLS certificates (makes the scan active)"],
   ];
   const featureCard = ([key, ic, title, desc]) => {
@@ -573,7 +588,7 @@ async function showProgress(id) {
 
 const tabState = { domain: "findings", email: "breaches" };
 
-async function showResult(id) {
+async function showResult(id, tab) {
   render(h("div", { class: "empty" }, h("span", { class: "spinner", style: "display:inline-block" })));
   let r;
   try { r = await api.get(`/api/scans/${id}`); }
@@ -582,6 +597,7 @@ async function showResult(id) {
     return;
   }
   const isEmail = r.meta.kind === "email";
+  if (tab) tabState[isEmail ? "email" : "domain"] = tab;
   const mode = !isEmail && r.meta.options?.passive === false ? "full" : "passive";
   const wb = await watchButton(isEmail ? "email" : "domain", isEmail ? r.meta.email : r.meta.domain, mode, id);
   if (isEmail) showEmailResult(r, id, wb);
@@ -641,6 +657,9 @@ function tabbed(kind, tabs, views) {
   if (!tabs.some(([k]) => k === tabState[kind])) tabState[kind] = tabs[0][0];
   function open(key, arg) {
     tabState[kind] = key;
+    // Reflect the tab in the URL (bookmarkable) without re-running the router.
+    const parts = location.hash.split("/");
+    if (parts[1] === "scan" && parts[2]) history.replaceState(null, "", `#/scan/${parts[2]}/${key}`);
     for (const b of bar.children) b.classList.toggle("active", b.dataset.key === key);
     panel.replaceChildren(views[key](arg));
   }
@@ -674,6 +693,7 @@ function showDomainResult(r, id, watchBtn) {
     ["hosts", "Hosts", r.hosts.length],
     ["dns", "DNS", null],
     r.email ? ["email", "Email security", null] : null,
+    r.exposure ? ["exposure", "Ports & CVEs", r.summary.open_ports ?? null] : null,
     http.length ? ["web", "Websites & TLS", http.length] : null,
     r.rdap || r.errors?.whois ? ["whois", "Registration", null] : null,
   ].filter(Boolean);
@@ -681,6 +701,7 @@ function showDomainResult(r, id, watchBtn) {
   const t = tabbed("domain", tabs, {
     findings: () => findingsView(r, sevFilter), hosts: () => hostsView(r), dns: () => dnsView(r),
     email: () => domainEmailView(r.email), web: () => webView(r), whois: () => whoisView(r),
+    exposure: () => exposureView(r),
   });
 
   const verdict = counts.high
@@ -769,6 +790,7 @@ function hostsView(r) {
         h("td", { class: "mono" }, x.ips.length ? x.ips.join(", ") : h("span", { class: "muted" }, "doesn't resolve")),
         h("td", { class: "mono" }, x.cname || ""),
         h("td", {}, (x.asn || []).join(", ")),
+        h("td", {}, (x.ports || []).map(portChip), x.vulns?.length ? h("span", { class: "tag warn", title: "Reported vulnerabilities" }, `${x.vulns.length} CVEs`) : null),
         h("td", {}, p ? (p.reachable ? [h("span", { class: `status-${String(p.status)[0]}` }, p.status), " ", p.title || ""] : h("span", { class: "muted" }, "no response")) : ""),
         h("td", {},
           x.dangling ? h("span", { class: "tag warn" }, "dangling CNAME") : null,
@@ -790,8 +812,82 @@ function hostsView(r) {
       Object.entries(src.counts).map(([s, n]) => h("span", { class: "tag good" }, `${s}: ${n}`)),
       Object.keys(src.errors).map((s) => h("span", { class: "tag warn", title: src.errors[s] }, `${s}: failed`))) : null,
     h("div", { class: "table-wrap" }, h("table", {},
-      h("thead", {}, h("tr", {}, ["Host", "IP addresses", "Points to", "Network", "Website", "Notes"].map((x) => h("th", {}, x)))),
+      h("thead", {}, h("tr", {}, ["Host", "IP addresses", "Points to", "Network", "Open ports", "Website", "Notes"].map((x) => h("th", {}, x)))),
       body)));
+}
+
+/* ---- open ports & vulnerabilities ---- */
+
+const RISKY_PORTS = {
+  21: "FTP", 23: "Telnet", 135: "Microsoft RPC", 139: "NetBIOS", 445: "SMB", 161: "SNMP", 389: "LDAP",
+  1433: "MS SQL", 1521: "Oracle DB", 2375: "Docker API", 3306: "MySQL", 3389: "RDP", 5432: "PostgreSQL",
+  5601: "Kibana", 5900: "VNC", 5985: "WinRM", 5986: "WinRM", 6379: "Redis", 9200: "Elasticsearch",
+  11211: "Memcached", 27017: "MongoDB",
+};
+const COMMON_PORTS = { 22: "SSH", 25: "SMTP", 53: "DNS", 80: "HTTP", 110: "POP3", 123: "NTP", 143: "IMAP", 443: "HTTPS",
+  465: "SMTPS", 587: "SMTP", 993: "IMAPS", 995: "POP3S", 8080: "HTTP-alt", 8443: "HTTPS-alt" };
+const portLabel = (p) => RISKY_PORTS[p] || COMMON_PORTS[p] || "";
+
+function portChip(p) {
+  const risky = p in RISKY_PORTS;
+  const label = portLabel(p);
+  return h("span", { class: `tag ${risky ? "warn" : ""}`, title: risky ? `${label}: shouldn't be exposed to the internet` : label || `port ${p}` },
+    label ? `${p} ${label}` : String(p));
+}
+
+function cveChip(id, meta) {
+  const m = meta || {};
+  const cls = m.kev ? "warn" : m.priority === "high" ? "warn" : m.priority === "medium" ? "note" : "";
+  const epss = m.epss != null ? ` · ${(m.epss * 100).toFixed(m.epss < 0.1 ? 1 : 0)}%` : "";
+  return h("a", { class: `tag ${cls}`, href: `https://nvd.nist.gov/vuln/detail/${id}`, target: "_blank", rel: "noopener noreferrer",
+    title: m.kev ? `Known exploited: ${m.kev_name || ""}${m.ransomware ? " (used by ransomware)" : ""}` : "Open in the National Vulnerability Database" },
+  m.kev ? "⚠ " : "", id, epss);
+}
+
+function exposureView(r) {
+  const exp = r.exposure;
+  const ipHosts = {};
+  for (const x of r.hosts) for (const ip of x.ips) (ipHosts[ip] ||= []).push(x.name);
+  const ips = Object.entries(exp.ips).sort((a, b) => b[1].vulns.length - a[1].vulns.length || b[1].ports.length - a[1].ports.length);
+  const cves = Object.entries(exp.cves);
+  const kev = cves.filter(([, m]) => m.kev);
+  const risky = ips.filter(([, i]) => i.ports.some((p) => p in RISKY_PORTS));
+  const rank = (m) => (m.kev ? 2 : 0) + (m.epss || 0);
+
+  const ipRows = ips.map(([ip, info]) => {
+    const sorted = [...info.vulns].sort((a, b) => rank(exp.cves[b] || {}) - rank(exp.cves[a] || {}));
+    const top = sorted.slice(0, 6);
+    const rest = sorted.slice(6);
+    return h("tr", {},
+      h("td", { class: "mono" }, ip, h("div", { class: "muted", style: "font-family:inherit;font-size:12.5px" },
+        (ipHosts[ip] || info.hostnames || []).slice(0, 3).join(", "))),
+      h("td", {}, (r.asn?.[ip]?.as_name) || ""),
+      h("td", {}, info.ports.length ? info.ports.map(portChip) : h("span", { class: "muted" }, "none seen")),
+      h("td", {}, sorted.length ? [top.map((c) => cveChip(c, exp.cves[c])),
+        rest.length ? h("details", { class: "inline-more" }, h("summary", {}, `+${rest.length} more`), rest.map((c) => cveChip(c, exp.cves[c]))) : null]
+        : h("span", { class: "muted" }, "none reported")),
+      h("td", {}, info.tags.map((t) => h("span", { class: `tag ${t.startsWith("eol") ? "warn" : ""}` }, t))));
+  });
+
+  return h("div", {},
+    h("div", { class: "tiles" },
+      tile("Open ports", risky.length ? "bad" : "neutral", String(r.summary.open_ports ?? 0),
+        risky.length ? `${plural(risky.length, "IP")} expose risky services (red).` : `Across ${plural(Object.keys(exp.ips).length, "IP")} Shodan has data for.`),
+      tile("Known exploited", kev.length ? "bad" : "good", String(kev.length),
+        kev.length ? "In CISA's Known Exploited Vulnerabilities list. Patch these first." : "No CVEs from CISA's known-exploited list."),
+      tile("Reported CVEs", cves.length ? "warn" : "good", String(cves.length),
+        cves.length ? "Ranked by EPSS: the chance of exploitation in the next 30 days." : "No vulnerabilities reported."),
+      tile("IPs checked", exp.ok ? "neutral" : "warn", `${exp.checked}`,
+        exp.failed ? `${exp.failed} lookups failed; results may be incomplete.` : "Public IPs looked up in Shodan InternetDB.")),
+    h("div", { class: "notice", style: "margin:0 0 14px" },
+      "Passive data from Shodan's weekly internet scans; domainscope didn't connect to these hosts. ",
+      "CVEs are inferred from software versions, and vendors often patch without changing the version, so treat them as leads to verify. ",
+      "Click a CVE for details. % = EPSS exploit probability, ⚠ = known exploited."),
+    ips.length ? h("div", { class: "panel" }, h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, ["IP / hosts", "Network", "Open ports", "Vulnerabilities (most urgent first)", "Tags"].map((x) => h("th", {}, x)))),
+      h("tbody", {}, ipRows))))
+      : h("div", { class: "panel" }, h("div", { class: "empty" }, "Shodan has no data for these IPs. That usually means nothing notable is exposed.")),
+    errorsNotice({ errors: Object.fromEntries(Object.entries(exp.errors || {}).map(([k, v]) => [`exposure:${k}`, v])) }));
 }
 
 function tile(title, cls, status, text) {

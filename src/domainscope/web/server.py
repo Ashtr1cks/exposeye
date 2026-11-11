@@ -129,6 +129,7 @@ class ScanRequest(BaseModel):
     whois: bool = True
     email: bool = True
     subdomains: bool = True
+    exposure: bool = True
     probe_limit: int = Field(25, ge=0, le=200)
 
 
@@ -299,6 +300,7 @@ def create_app(
             whois=req.whois,
             email=req.email,
             subdomains=req.subdomains,
+            exposure=req.exposure,
             probe_limit=req.probe_limit,
         )
         return start_job(

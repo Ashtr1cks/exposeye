@@ -14,11 +14,13 @@ from domainscope.modules import (
     asn,
     dns_records,
     email_security,
+    exposure,
     http_probe,
     rdap,
     subdomains,
     tls_info,
 )
+from domainscope.settings import data_dir
 from domainscope.utils import SEVERITIES, finding, make_session, short_error
 
 INTERESTING_WORDS = (
@@ -63,6 +65,7 @@ class ScanOptions:
     whois: bool = True
     email: bool = True
     subdomains: bool = True
+    exposure: bool = True
     probe_limit: int = 25
     max_hosts: int = 1000
     workers: int = 20
@@ -223,6 +226,32 @@ def scan(domain: str, opts: ScanOptions | None = None, progress: Progress = _noo
     networks = {(i["asn"], i.get("as_name")) for i in asn_map.values()}
     progress("ASN", f"{len(ips)} IPs across {len(networks)} networks", True)
 
+    # 6b. Open ports & known vulnerabilities (passive: Shodan InternetDB + KEV + EPSS) ----
+    result["exposure"] = None
+    if opts.exposure:
+        exp_ips = [ip for ip in ips if not (wildcard and ip in wildcard)][:100]
+        exp = exposure.collect(exp_ips, session, cache_dir=data_dir() / "cache")
+        result["exposure"] = exp
+        for source, err in exp["errors"].items():
+            errors[f"exposure:{source}"] = err
+        ip_hosts: dict[str, list[str]] = defaultdict(list)
+        for h in hosts:
+            for ip in h["ips"]:
+                ip_hosts[ip].append(h["name"])
+        for h in hosts:
+            infos = [exp["ips"][ip] for ip in h["ips"] if ip in exp["ips"]]
+            h["ports"] = sorted({p for i in infos for p in i["ports"]})
+            h["vulns"] = sorted({v for i in infos for v in i["vulns"]})
+        add("exposure", exposure.findings(exp, ip_hosts))
+        n_ports = sum(len(i["ports"]) for i in exp["ips"].values())
+        n_kev = sum(1 for c in exp["cves"].values() if c.get("kev"))
+        progress(
+            "Exposure",
+            f"{n_ports} open ports on {len(exp['ips'])}/{exp['checked']} IPs, "
+            f"{len(exp['cves'])} CVEs ({n_kev} known-exploited)",
+            exp["ok"] and n_kev == 0,
+        )
+
     result["hosts"] = hosts
 
     # 7. Active: HTTP + TLS ----------------------------------------------------
@@ -264,6 +293,11 @@ def scan(domain: str, opts: ScanOptions | None = None, progress: Progress = _noo
         "unique_ips": len(ips),
         "networks": len(networks),
         "hosts_probed": len(result["http"]),
+        "open_ports": sum(
+            len(i["ports"]) for i in (result["exposure"] or {}).get("ips", {}).values()
+        ),
+        "cves": len((result["exposure"] or {}).get("cves", {})),
+        "kev": sum(1 for c in (result["exposure"] or {}).get("cves", {}).values() if c.get("kev")),
         "truncated": truncated,
     }
     result["meta"]["finished"] = datetime.now(timezone.utc).isoformat(timespec="seconds")

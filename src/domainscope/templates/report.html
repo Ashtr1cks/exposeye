@@ -19,7 +19,7 @@
 </header>
 <nav><div>
   <a href="#findings">Findings</a><a href="#whois">Registration</a><a href="#dns">DNS</a>
-  {% if r.email %}<a href="#email">Email</a>{% endif %}<a href="#hosts">Hosts</a>
+  {% if r.email %}<a href="#email">Email</a>{% endif %}<a href="#hosts">Hosts</a>{% if r.exposure %}<a href="#exposure">Ports &amp; CVEs</a>{% endif %}
   {% if r.http %}<a href="#http">HTTP</a>{% endif %}{% if r.tls %}<a href="#tls">TLS</a>{% endif %}
 </div></nav>
 <main>
@@ -129,6 +129,28 @@
     </tbody>
   </table></div>
 </section>
+
+{% if r.exposure %}
+<section id="exposure">
+  <h2>Open ports &amp; vulnerabilities</h2>
+  <p class="muted">Passive data from Shodan InternetDB (weekly internet scans). CVEs are inferred from software versions; verify before acting. KEV = CISA Known Exploited Vulnerabilities, EPSS = exploit probability (30 days).</p>
+  {% if r.exposure.ips %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>IP</th><th>Open ports</th><th>Vulnerabilities</th><th>Tags</th></tr></thead>
+    <tbody>
+    {% for ip, info in r.exposure.ips|dictsort %}
+      <tr>
+        <td class="mono">{{ ip }}</td>
+        <td>{% for p in info.ports %}<span class="tag">{{ p }}</span>{% else %}-{% endfor %}</td>
+        <td>{% for c in info.vulns %}{% set m = r.exposure.cves.get(c, {}) %}<span class="tag{% if m.kev %} warn{% endif %}">{{ c }}{% if m.kev %} (KEV){% endif %}{% if m.epss is not none and m.epss is defined %} {{ "%.0f"|format(m.epss * 100) }}%{% endif %}</span>{% else %}-{% endfor %}</td>
+        <td>{{ info.tags|join(", ") }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<p class="muted">No Shodan data for these IPs.</p>{% endif %}
+</section>
+{% endif %}
 
 {% if r.http %}
 <section id="http">

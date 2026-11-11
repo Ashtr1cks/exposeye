@@ -23,6 +23,7 @@ Pick what you want to find out, type a domain, and press **Run scan**. No comman
 | **Quiet look** | Public sources only; never contacts the domain's servers |
 | **Email spoofing check** | SPF, DMARC, MTA-STS: can someone send fake mail as this domain? |
 | **Find subdomains** | Certificate-log search, dangling-CNAME / takeover detection |
+| **Open ports & vulnerabilities** | Exposed services (RDP, databases…) and known CVEs on every IP, passively |
 | **Website security check** | Security headers, TLS certificate, version leaks |
 | **Who owns it?** | Registrar, dates, name servers, abuse contact |
 | **Email exposure check** | Which data breaches include an email, and whether passwords leaked |
@@ -76,6 +77,28 @@ reset pages to enumerate accounts. Check your own address, or someone else's wit
 It opens in its own window (via [pywebview](https://pywebview.flowrl.com/)), or in your browser
 if pywebview isn't installed or you pass `--browser`. The server only listens on `127.0.0.1` and
 rejects requests with any other `Host` header, which blocks DNS-rebinding attacks.
+
+## Open ports & vulnerabilities
+
+For every IP the scan finds, domainscope asks [Shodan InternetDB](https://internetdb.shodan.io/)
+what Shodan's own internet-wide scans saw there: open ports, detected software, tags and CVE IDs.
+This is passive, so domainscope never connects to the hosts, and it works in Quiet look mode. CVEs
+are then ranked so the urgent ones stand out:
+
+- **CISA KEV:** CVEs being exploited in real attacks (and whether ransomware groups use them).
+  These are reported as **high**.
+- **FIRST EPSS:** the probability of exploitation in the next 30 days. 50% or more is **high**,
+  10% or more is **medium**, and everything else is **low**.
+- **Risky services** exposed to the internet, such as RDP, SMB, Telnet, VNC, databases
+  (MySQL/Postgres/MongoDB/Redis/Elasticsearch), the Docker API, and end-of-life software.
+
+Monitoring alerts when a risky port opens or a new known-exploited CVE appears.
+
+> CVEs are inferred from version banners, and vendors often backport fixes without changing the
+> version string, so treat them as leads to verify. InternetDB is free for non-commercial use and
+> is refreshed weekly.
+
+![Ports & CVEs view](docs/app-exposure.png)
 
 ## Monitoring
 
@@ -144,6 +167,7 @@ $ domainscope example.com --open
 | **Subdomains** | [crt.sh](https://crt.sh), [Cert Spotter](https://sslmate.com/certspotter/) | Every hostname that ever appeared on a public TLS certificate | No |
 | **Resolution** | DNS | Live vs historical hosts, CNAME chains, **dangling CNAMEs** (subdomain-takeover candidates) | Via DNS only |
 | **Hosting / ASN** | [Team Cymru](https://www.team-cymru.com/ip-asn-mapping) over DNS | IP → ASN, prefix, network owner | No |
+| **Open ports & CVEs** | [Shodan InternetDB](https://internetdb.shodan.io/), [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog), [FIRST EPSS](https://www.first.org/epss/) | Open ports per IP, CVEs ranked by known exploitation and exploit probability, end-of-life software | No |
 | **HTTP** | Direct | Status, title, redirects, missing security headers, version leaks, tech fingerprint | **Yes** |
 | **TLS** | Direct | Certificate validity, issuer, expiry, SANs, protocol | **Yes** |
 
@@ -183,6 +207,7 @@ python -m domainscope --help               # works without the console script to
 | `--no-subdomains` | off | Skip Certificate Transparency discovery |
 | `--no-whois` | off | Skip the registration (RDAP) lookup |
 | `--no-email` | off | Skip SPF/DMARC/MTA-STS checks |
+| `--no-exposure` | off | Skip the open-port/CVE lookup |
 | `-f, --format` | `html,md,json` | Report formats to write |
 | `-o, --output-dir` | `reports` | Where reports go |
 | `--open` | off | Open the HTML report in your browser |
@@ -235,6 +260,7 @@ src/domainscope/
     ├── asn.py          # Team Cymru DNS lookups
     ├── http_probe.py   # headers, fingerprinting
     ├── tls_info.py     # certificate inspection (stdlib ssl)
+    ├── exposure.py     # Shodan InternetDB ports/CVEs + KEV + EPSS
     ├── breaches.py     # XposedOrNot / HIBP breach lookups
     ├── passwords.py    # Pwned Passwords k-anonymity check
     └── email_identity.py  # provider type, disposable list, Gravatar

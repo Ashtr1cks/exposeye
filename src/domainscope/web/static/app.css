@@ -397,3 +397,10 @@ select { font: inherit; color: var(--text); background: var(--panel); border: 1p
   .change { grid-template-columns: 1fr; gap: 4px; }
   .event-links { margin-left: 0; }
 }
+
+/* ---------- exposure ---------- */
+a.tag { text-decoration: none; }
+a.tag:hover { filter: brightness(1.15); text-decoration: underline; }
+details.inline-more { display: inline; }
+details.inline-more summary { display: inline; cursor: pointer; color: var(--accent); font-size: 12px; margin-left: 4px; }
+details.inline-more[open] summary { display: block; margin: 4px 0; }

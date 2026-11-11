@@ -67,6 +67,22 @@ DNSSEC: **{{ "enabled" if r.dns.dnssec else "not enabled" }}**{% if r.dns.wildca
 | {{ h.name }} | {{ cell(h.ips|join(", ") or "unresolved") }} | {{ cell(h.cname) }} | {{ cell(h.asn|join(", ")) }} | {{ ["dangling" if h.dangling, "wildcard" if h.wildcard, "interesting" if h.interesting]|select|join(", ") }} |
 {% endfor %}
 
+{% if r.exposure %}
+## Open ports & vulnerabilities
+
+Passive data from Shodan InternetDB. CVEs are inferred from software versions; verify before acting.
+
+{% if r.exposure.ips %}
+| IP | Open ports | CVEs (KEV = known exploited) | Tags |
+|---|---|---|---|
+{% for ip, info in r.exposure.ips|dictsort %}
+| {{ ip }} | {{ info.ports|join(", ") or "-" }} | {% for c in info.vulns %}{{ c }}{% if r.exposure.cves.get(c, {}).kev %} (KEV){% endif %}{% if not loop.last %}, {% endif %}{% else %}-{% endfor %} | {{ info.tags|join(", ") }} |
+{% endfor %}
+{% else %}
+No Shodan data for these IPs.
+{% endif %}
+{% endif %}
+
 {% if r.http %}
 ## HTTP
 

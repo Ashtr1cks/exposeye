@@ -80,8 +80,73 @@ def diff_domain(old: dict, new: dict) -> list[dict]:
     if not oo.get("passive") and not no.get("passive"):
         _tls(old.get("tls") or [], new.get("tls") or [], out)
         _web(old.get("http") or [], new.get("http") or [], out)
+    _exposure(old.get("exposure"), new.get("exposure"), out)
     _findings(old.get("findings") or [], new.get("findings") or [], out)
     return out
+
+
+def _exposure(old: dict | None, new: dict | None, out: list) -> None:
+    """New open ports / CVEs per IP. Only IPs that both scans looked up are compared."""
+    if not (old and new and old.get("ok") and new.get("ok")):
+        return
+    from domainscope.modules.exposure import RISKY_PORTS, service_name
+
+    oi, ni = old.get("ips") or {}, new.get("ips") or {}
+    opened_risky, opened, closed = [], [], []
+    for ip in sorted(set(oi) & set(ni)):
+        before, after = set(oi[ip]["ports"]), set(ni[ip]["ports"])
+        for port in sorted(after - before):
+            label = f"{service_name(port)} ({port}) on {ip}"
+            (opened_risky if port in RISKY_PORTS else opened).append(label)
+        closed += [f"{service_name(p)} ({p}) on {ip}" for p in sorted(before - after)]
+    if opened_risky:
+        out.append(
+            change(
+                "exposure",
+                "high",
+                f"Risky port(s) newly opened: {len(opened_risky)}",
+                _names(opened_risky),
+            )
+        )
+    if opened:
+        out.append(change("exposure", "low", f"New open port(s): {len(opened)}", _names(opened)))
+    if closed:
+        out.append(
+            change("exposure", "info", f"Port(s) closed: {len(closed)}", _names(closed), good=True)
+        )
+
+    old_cves = {c for ip in set(oi) & set(ni) for c in oi[ip]["vulns"]}
+    new_cves = {c for ip in set(oi) & set(ni) for c in ni[ip]["vulns"]}
+    meta = new.get("cves") or {}
+    fresh = sorted(new_cves - old_cves)
+    kev = [c for c in fresh if meta.get(c, {}).get("kev")]
+    rest = [c for c in fresh if c not in kev]
+    if kev:
+        out.append(
+            change(
+                "exposure", "high", f"New known-exploited vulnerabilities: {len(kev)}", _names(kev)
+            )
+        )
+    if rest:
+        worst = (
+            "medium"
+            if any(meta.get(c, {}).get("priority") in ("high", "medium") for c in rest)
+            else "low"
+        )
+        out.append(
+            change("exposure", worst, f"New reported vulnerabilities: {len(rest)}", _names(rest))
+        )
+    gone = sorted(old_cves - new_cves)
+    if gone:
+        out.append(
+            change(
+                "exposure",
+                "info",
+                f"Vulnerabilities no longer reported: {len(gone)}",
+                _names(gone),
+                good=True,
+            )
+        )
 
 
 def _ct_ok(result: dict) -> bool:
@@ -402,6 +467,7 @@ def _web(old: list, new: list, out: list) -> None:
 
 
 # Findings already covered by the specific comparisons above.
+_SKIP_FINDING_EXPOSURE = "exposure"  # covered by _exposure(), which compares per IP
 _SKIP_FINDING = re.compile(
     r"^(Dangling CNAME|TLS certificate|Domain registration expires|Recently registered)"
 )
@@ -418,6 +484,7 @@ def _findings(old: list, new: list, out: list) -> None:
             for f in items
             if f.get("severity") in ("high", "medium")
             and not _SKIP_FINDING.match(f.get("title", ""))
+            and f.get("module") != _SKIP_FINDING_EXPOSURE
         }
 
     o, n = important(old), important(new)
