@@ -980,7 +980,7 @@ const netName = (r, ip) => {
 
 function buildGraph(r, opt) {
   const domain = r.meta.domain;
-  const grouped = opt.layout !== "free";
+  const grouped = opt.layout === "grouped";
   const tlsBy = Object.fromEntries((r.tls || []).map((t) => [t.host, t]));
   const nodes = new Map();
   const edges = [];
@@ -1078,7 +1078,77 @@ function buildGraph(r, opt) {
   // Parents first, so every compound node exists before its children.
   const list = [...nodes.values()];
   const ordered = [...list.filter((n) => n.data.kind === "group"), ...list.filter((n) => n.data.kind !== "group")];
-  return { elements: [...ordered, ...edges], truncated, hostCount: hosts.length, grouped };
+  return { elements: [...ordered, ...edges], truncated, hostCount: hosts.length, grouped, mode: opt.layout };
+}
+
+// Radial "gravity" layout: the domain sits at the centre, and each node is placed on a ring by its
+// distance (in hops) from the domain, so indirect infrastructure (IPs, networks) drifts outward.
+// Children are kept in an angular wedge under their parent, giving a sunburst that reads as gravity.
+function radialLayout(cy) {
+  const root = cy.nodes('[kind = "root"]').first();
+  if (!root.length) return;
+  const level = new Map([[root.id(), 0]]);
+  const parent = new Map();
+  const children = new Map();
+  cy.nodes().forEach((n) => children.set(n.id(), []));
+  const queue = [root];
+  while (queue.length) {
+    const n = queue.shift();
+    n.connectedEdges().connectedNodes().forEach((m) => {
+      if (!level.has(m.id())) {
+        level.set(m.id(), level.get(n.id()) + 1);
+        parent.set(m.id(), n.id());
+        children.get(n.id()).push(m.id());
+        queue.push(m);
+      }
+    });
+  }
+  const leaves = new Map();
+  const countLeaves = (id) => {
+    const ch = children.get(id);
+    if (!ch.length) { leaves.set(id, 1); return 1; }
+    const s = ch.reduce((acc, c) => acc + countLeaves(c), 0);
+    leaves.set(id, s);
+    return s;
+  };
+  countLeaves(root.id());
+
+  let maxLevel = 0;
+  const perLevel = {};
+  level.forEach((l) => { maxLevel = Math.max(maxLevel, l); perLevel[l] = (perLevel[l] || 0) + 1; });
+  const radius = [0];
+  for (let l = 1; l <= maxLevel; l++) {
+    const circumferenceNeed = (perLevel[l] * 46) / (2 * Math.PI); // expand crowded rings
+    radius[l] = Math.max(radius[l - 1] + 110, circumferenceNeed);
+  }
+
+  const angle = new Map();
+  const assign = (id, a0, a1) => {
+    angle.set(id, (a0 + a1) / 2);
+    const ch = children.get(id).slice().sort((x, y) => x.localeCompare(y));
+    const total = ch.reduce((acc, c) => acc + leaves.get(c), 0) || 1;
+    let a = a0;
+    for (const c of ch) {
+      const span = (a1 - a0) * (leaves.get(c) / total);
+      assign(c, a, a + span);
+      a += span;
+    }
+  };
+  assign(root.id(), 0, 2 * Math.PI);
+
+  let stray = 0;
+  cy.batch(() => {
+    cy.nodes().forEach((n) => {
+      const l = level.get(n.id());
+      if (l === undefined) { // not connected to the domain (rare): park it below the rings
+        n.position({ x: (stray++ % 12) * 60 - 330, y: radius[maxLevel] + 160 });
+        return;
+      }
+      const r = radius[l];
+      const ang = angle.get(n.id());
+      n.position({ x: Math.cos(ang) * r, y: Math.sin(ang) * r });
+    });
+  });
 }
 
 const REGION_PAD = 26;
@@ -1221,7 +1291,7 @@ function mapStyle(z) {
 function mapView(r) {
   const saved = store.get("ds.map", {});
   const opt = {
-    layout: saved.layout === "free" ? "free" : "grouped",
+    layout: ["free", "grouped"].includes(saved.layout) ? saved.layout : "radial",
     riskyOnly: !!saved.riskyOnly, historical: !!saved.historical,
     compact: saved.compact ?? r.hosts.filter((x) => x.ips.length).length > 60,
   };
@@ -1231,6 +1301,7 @@ function mapView(r) {
   const search = h("input", { type: "search", class: "search", placeholder: "Find a host, IP or provider…", "aria-label": "Search the map" });
   const fullBtn = h("button", { class: "btn btn-sm", type: "button", title: "Full screen" }, icon("expand"), "Full screen");
   const layoutSel = h("select", { "aria-label": "Map layout" },
+    h("option", { value: "radial" }, "Radial (domain in centre)"),
     h("option", { value: "grouped" }, "Grouped by provider"), h("option", { value: "free" }, "Free-form"));
   layoutSel.value = opt.layout;
   layoutSel.addEventListener("change", () => { opt.layout = layoutSel.value; store.set("ds.map", opt); draw(); });
@@ -1247,7 +1318,8 @@ function mapView(r) {
         h("p", { class: "muted" }, "Hover to highlight connections. Drag to rearrange. Scroll to zoom: dots spread out and more names appear as you go in."),
         h("ul", { class: "legend" },
           legendItem("diamond accent", "The domain"),
-          legendItem("region", opt.layout === "free" ? "Hosting network (provider)" : "Region = hosting provider (border = worst risk inside)"),
+          legendItem("region", opt.layout === "grouped" ? "Region = hosting provider (border = worst risk inside)" : "Hosting network (provider)"),
+          opt.layout === "radial" ? h("li", { class: "muted", style: "display:block" }, "Rings = distance from the domain: subdomains near the centre, their IPs and hosting networks further out.") : null,
           legendItem("dot", "Subdomain / host (bigger = more open ports)"),
           legendItem("square", "IP address"),
           legendItem("tag", "Outside service (CNAME)"),
@@ -1349,13 +1421,14 @@ function mapView(r) {
       z.zoom = 1; z.base = 1;
       const cy = cytoscape({
         container: graphBox, elements: g.elements, style: mapStyle(z), wheelSensitivity: 0.25, minZoom: 0.05, maxZoom: 8,
-        layout: g.grouped ? { name: "preset" } : { name: "cose", animate: false, randomize: true, padding: 24, nodeRepulsion: () => 26000,
+        layout: g.mode === "free" ? { name: "cose", animate: false, randomize: true, padding: 24, nodeRepulsion: () => 26000,
           idealEdgeLength: (e) => ({ sub: 95, ip: 45, net: 55, cname: 60, dangling: 60 }[e.data("kind")] || 60),
           edgeElasticity: (e) => (e.data("kind") === "sub" ? 40 : 120), nodeOverlap: 20, gravity: 0.2,
-          numIter: 2500, componentSpacing: 80 },
+          numIter: 2500, componentSpacing: 80 } : { name: "preset" },
       });
       state.cy = cy;
       if (g.grouped) groupedLayout(cy, cytoscape);
+      else if (g.mode === "radial") radialLayout(cy);
       cy.fit(undefined, 30);
       calibrate();
 
