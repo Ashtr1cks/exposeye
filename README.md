@@ -133,8 +133,18 @@ they look like English or a flag. Any result can be decoded further with one cli
   files, revisions) and Office document properties
 - **Tampered PNG headers:** a height or width edited to hide part of the image is detected from
   the checksum, and the real size is recovered with a download of the repaired image
-- **LSB steganography:** extraction across channels, bits and bit orders, ranked by readable
-  text, plus bit-plane images
+- **Image steganography**, a built-in alternative to Stegsolve and zsteg:
+  - A plane viewer for every bit (0–7) of R, G, B, alpha, luminance and palette indices, plus
+    full-channel, inverted and random-colour filters. Step through with ← / → and click any
+    plane in the overview grid.
+  - Automatic LSB extraction across 90+ combinations (rows, columns or reversed; bits 0–2;
+    MSB- or LSB-first packing; palette indices), ranked by readable text, file headers and flags
+- **Audio steganography (WAV):** spectrograms, including a left-minus-right view that exposes
+  signals hidden in one stereo channel, plus sample LSB extraction and DTMF and Morse decoding
+- **Text steganography:** zero-width Unicode characters and trailing-whitespace encodings (also
+  in the Decoder)
+- **JPEG and compressed audio:** explains why LSB doesn't apply and which tool to use (stegseek,
+  steghide, ffmpeg), and detects whether you have it installed
 - Strings (ASCII and UTF-16), an entropy graph, hashes and a hex view, plus plain-English
   **"what to look at"** hints
 
@@ -145,9 +155,13 @@ exposeye-lab --flag "myctf{...}" file chall.png
 
 ![CTF Lab decoder](docs/app-lab-decoder.png)
 
-<details><summary>Screenshot: file analyser</summary>
+<details><summary>Screenshots: file analyser and steganography</summary>
 
 ![CTF Lab file analyser](docs/app-lab-file.png)
+
+![Bit-plane viewer revealing hidden text](docs/app-lab-stego.png)
+
+![Spectrogram with a hidden message](docs/app-lab-audio.png)
 </details>
 
 Reverse engineering and binary exploitation are better served by dedicated tools (Ghidra,

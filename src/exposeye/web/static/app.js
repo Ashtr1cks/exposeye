@@ -2097,7 +2097,8 @@ function fileReport(r) {
     ["strings", "Strings", r.strings.length],
     ["hidden", "Hidden data", hiddenCount || null],
     ["meta", "Metadata", null],
-    r.lsb ? ["stego", "Steganography", null] : null,
+    r.lsb || r.text_stego?.length ? ["stego", "Steganography", null] : null,
+    r.audio ? ["audio", "Audio", null] : null,
     ["hex", "Hex", null],
   ].filter(Boolean);
   const t = tabbed("file", tabs, {
@@ -2106,6 +2107,7 @@ function fileReport(r) {
     hidden: () => fileHidden(r, dl, extractUrl),
     meta: () => fileMeta(r),
     stego: () => fileStego(r),
+    audio: () => fileAudio(r),
     hex: () => h("div", { class: "panel" }, h("pre", { class: "hexdump" }, r.hexdump || "(empty)"),
       h("p", { class: "muted" }, "First 512 bytes.")),
   });
@@ -2244,22 +2246,144 @@ function fileMeta(r) {
   return h("div", {}, parts);
 }
 
-function fileStego(r) {
-  const top = r.lsb.candidates;
+function lsbTable(rows, flagsFor, tried) {
   return h("div", {},
-    h("div", { class: "panel" }, h("h3", {}, "Least-significant-bit extraction"),
-      h("p", { class: "muted" }, "Hidden messages often live in the lowest bit of each colour value. These are the extraction orders that produced the most readable output."),
-      h("div", { class: "table-wrap" }, h("table", {},
-        h("thead", {}, h("tr", {}, ["Channels", "Bit", "Order", "Readable text", "Starts with"].map((x) => h("th", {}, x)))),
-        h("tbody", {}, top.map((c) => h("tr", { class: c.flags.length ? "flag-row-hit" : "" },
-          h("td", {}, c.channels), h("td", {}, c.bit), h("td", {}, c.order),
-          h("td", {}, c.text_prefix >= 6 ? `${c.text_prefix} chars` : `${Math.round(c.printable * 100)}%`, c.magic ? h("span", { class: "tag note" }, c.magic) : null),
-          h("td", { class: "mono lsb-preview" }, highlightFlags(c.preview.replace(/[^\x20-\x7e]/g, "·"), c.flags)))))))),
-    h("div", { class: "panel" }, h("h3", {}, "Bit planes"),
-      h("p", { class: "muted" }, "White = bit set. Text or shapes visible in a plane mean something was hidden there."),
-      h("div", { class: "planes" }, r.lsb.planes.map((p) => h("figure", {},
-        h("img", { src: `data:image/png;base64,${p.png}`, alt: `${p.channel} channel bit ${p.bit}` }),
-        h("figcaption", {}, `${p.channel} · bit ${p.bit}`))))));
+    h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, ["Channels", "Bit", "Order", "Packing", "Readable text", "Starts with"].map((x) => h("th", {}, x)))),
+      h("tbody", {}, rows.map((c) => h("tr", { class: c.flags.length ? "flag-row-hit" : "" },
+        h("td", {}, c.channels), h("td", {}, c.bit), h("td", {}, c.order), h("td", { class: "muted" }, c.packing),
+        h("td", {}, c.text_prefix >= 6 ? `${c.text_prefix} chars` : `${Math.round(c.printable * 100)}%`,
+          c.magic ? h("span", { class: "tag note" }, c.magic) : null),
+        h("td", { class: "mono lsb-preview" }, highlightFlags(c.preview.replace(/[^\x20-\x7e]/g, "·"), c.flags))))))),
+    tried ? h("p", { class: "muted", style: "margin:8px 0 0;font-size:12.5px" },
+      `Best of ${tried} channel / bit / order / packing combinations tried.`) : null);
+}
+
+function textStegoPanel(r) {
+  return h("div", { class: "panel" }, h("h3", {}, "Hidden text"),
+    r.text_stego.map((t) => h("div", { class: "text-stego" },
+      h("div", { class: "finding-title" }, t.method),
+      t.output ? h("pre", { class: "lab-output" }, highlightFlags(t.output, t.flags)) : null,
+      t.output ? h("button", { class: "btn btn-sm", type: "button", onclick: () => sendToDecoder(t.output) }, "Send to decoder") : null)));
+}
+
+function planeViewer(r) {
+  const s = { channel: r.lsb.channels[0], bit: 0, mode: "bit", actual: false };
+  const img = h("img", { class: "plane-view", alt: "Selected bit plane" });
+  const caption = h("div", { class: "plane-caption" });
+  const chSel = h("select", { "aria-label": "Channel" }, r.lsb.channels.map((c) => h("option", { value: c }, c)));
+  const modeSel = h("select", { "aria-label": "View" },
+    [["bit", "Bit plane"], ["channel", "Full channel"], ["inverted", "Inverted"], ["random", "Random colours"]]
+      .map(([v, l]) => h("option", { value: v }, l)));
+  const bitBtns = [7, 6, 5, 4, 3, 2, 1, 0].map((b) => h("button", { type: "button", class: "bit-btn", "data-bit": b,
+    title: `Bit ${b}${b === 0 ? " (least significant)" : b === 7 ? " (most significant)" : ""}`,
+    onclick: () => { s.bit = b; s.mode = "bit"; update(); } }, String(b)));
+  const download = h("a", { class: "btn btn-sm", download: "" }, icon("download"), "Save view");
+  const sizeBtn = h("button", { class: "btn btn-sm", type: "button", onclick: () => { s.actual = !s.actual; update(); } });
+  // Stegsolve-style stepping: every bit of every channel, in order
+  const sequence = r.lsb.channels.flatMap((c) => [0, 1, 2, 3, 4, 5, 6, 7].map((b) => [c, b]));
+  const step = (d) => {
+    if (s.mode !== "bit") {
+      const i = r.lsb.channels.indexOf(s.channel);
+      s.channel = r.lsb.channels[(i + d + r.lsb.channels.length) % r.lsb.channels.length];
+    } else {
+      const i = sequence.findIndex(([c, b]) => c === s.channel && b === s.bit);
+      [s.channel, s.bit] = sequence[(i + d + sequence.length) % sequence.length];
+    }
+    update();
+  };
+  function update() {
+    const url = `/api/lab/files/${r.id}/plane?channel=${encodeURIComponent(s.channel)}&bit=${s.bit}&mode=${s.mode}`;
+    img.src = url;
+    img.classList.toggle("actual", s.actual);
+    download.href = url;
+    download.setAttribute("download", `${r.name.replace(/\.[^.]+$/, "")}_${s.channel}_${s.mode === "bit" ? `bit${s.bit}` : s.mode}.png`);
+    chSel.value = s.channel;
+    modeSel.value = s.mode;
+    sizeBtn.textContent = s.actual ? "Fit to panel" : "Actual size";
+    for (const b of bitBtns) b.classList.toggle("active", s.mode === "bit" && Number(b.dataset.bit) === s.bit);
+    caption.textContent = s.mode === "bit"
+      ? `${s.channel} · bit ${s.bit}: white = 1, black = 0${s.bit <= 1 ? ". Low bits should look like noise; shapes or text here mean hidden data." : ""}`
+      : { channel: `${s.channel} channel as greyscale`, inverted: `${s.channel} channel inverted`,
+        random: `${s.channel} values mapped to random colours: reveals text drawn in nearly identical shades` }[s.mode];
+  }
+  chSel.addEventListener("change", () => { s.channel = chSel.value; update(); });
+  modeSel.addEventListener("change", () => { s.mode = modeSel.value; update(); });
+  const wrap = h("div", { class: "panel plane-panel", tabindex: "0",
+    onkeydown: (e) => { if (e.key === "ArrowRight") { e.preventDefault(); step(1); } if (e.key === "ArrowLeft") { e.preventDefault(); step(-1); } } },
+    h("h3", {}, "Plane viewer"),
+    h("div", { class: "plane-controls" },
+      h("button", { class: "btn btn-sm", type: "button", title: "Previous (←)", onclick: () => step(-1) }, "←"),
+      chSel, modeSel,
+      h("div", { class: "bit-buttons", role: "group", "aria-label": "Bit" }, h("span", { class: "muted" }, "bit"), bitBtns),
+      h("button", { class: "btn btn-sm", type: "button", title: "Next (→)", onclick: () => step(1) }, "→"),
+      sizeBtn, download),
+    h("div", { class: "plane-stage" }, img),
+    caption);
+  wrap.select = (channel, bit) => { s.channel = channel; s.bit = bit; s.mode = "bit"; update(); wrap.scrollIntoView({ behavior: "smooth", block: "start" }); wrap.focus({ preventScroll: true }); };
+  update();
+  return wrap;
+}
+
+function planeGrid(r, viewer) {
+  const rows = r.lsb.channels.filter((c) => r.lsb.planes.some((p) => p.channel === c));
+  return h("div", { class: "panel" }, h("h3", {}, "All bit planes at a glance"),
+    h("p", { class: "muted" }, "Each row is a colour channel, from the most significant bit (7) to the least (0). Click one to open it above."),
+    h("div", { class: "plane-grid" }, rows.map((c) => [
+      h("div", { class: "plane-row-label" }, c),
+      [7, 6, 5, 4, 3, 2, 1, 0].map((b) => {
+        const p = r.lsb.planes.find((x) => x.channel === c && x.bit === b);
+        return h("button", { type: "button", class: "plane-thumb", title: `${c} bit ${b}`, onclick: () => viewer.select(c, b) },
+          h("img", { src: `data:image/png;base64,${p.png}`, alt: `${c} bit ${b}` }), h("span", {}, b));
+      }),
+    ])));
+}
+
+function fileStego(r) {
+  const parts = [];
+  if (r.text_stego?.length) parts.push(textStegoPanel(r));
+  if (r.lsb) {
+    if (!r.lsb.lossless) {
+      const tools = Object.entries(r.jpeg_tools || {}).filter(([, v]) => v).map(([k]) => k);
+      parts.push(h("div", { class: "notice" },
+        h("strong", {}, "JPEG: "), "compression destroys LSB data, so hidden data lives in the compressed coefficients instead (steghide, OutGuess, JSteg). Try ",
+        h("code", {}, `stegseek ${r.name} rockyou.txt`), " or ", h("code", {}, `steghide extract -sf ${r.name}`),
+        " with an empty password. ", tools.length ? `Installed here: ${tools.join(", ")}.` : "None of these tools are installed on this PC.",
+        " The planes below can still show visible tricks."));
+    }
+    const viewer = planeViewer(r);
+    parts.push(viewer, planeGrid(r, viewer));
+    if (r.lsb.candidates) {
+      parts.push(h("div", { class: "panel" }, h("h3", {}, "Automatic LSB extraction"),
+        h("p", { class: "muted" }, "Reads the low bits in the orders CTF tools use (rows, columns, reversed; bits 0–2; both bit packings; palette indices) and ranks the results by readable text, file headers and flags."),
+        lsbTable(r.lsb.candidates, null, r.lsb.tried)));
+    }
+  }
+  return h("div", {}, parts);
+}
+
+function fileAudio(r) {
+  const a = r.audio;
+  const secs = a.duration;
+  const spectro = (sp) => h("figure", { class: "spectro" },
+    h("figcaption", {}, sp.label),
+    h("div", { class: "spectro-frame" },
+      h("div", { class: "spectro-y" }, h("span", {}, `${(a.max_freq / 1000).toFixed(1)} kHz`), h("span", {}, `${(a.max_freq / 2000).toFixed(1)} kHz`), h("span", {}, "0 Hz")),
+      h("a", { href: `data:image/png;base64,${sp.png}`, target: "_blank", rel: "noopener", title: "Open full size" },
+        h("img", { src: `data:image/png;base64,${sp.png}`, alt: `Spectrogram: ${sp.label}` }))),
+    h("div", { class: "spectro-x" }, h("span", {}, "0 s"), h("span", {}, `${(secs / 2).toFixed(1)} s`), h("span", {}, `${secs} s`)));
+  return h("div", {},
+    h("div", { class: "tiles" },
+      tile("Format", "neutral", `${a.bits}-bit`, `${a.channels === 2 ? "Stereo" : a.channels === 1 ? "Mono" : `${a.channels} channels`}, ${(a.rate / 1000).toFixed(1)} kHz`),
+      tile("Duration", "neutral", `${secs} s`, secs >= 180 ? "Only the first 3 minutes are analysed." : "Whole file analysed."),
+      tile("DTMF tones", a.dtmf ? "good" : "neutral", a.dtmf ? "found" : "none", a.dtmf ? `Keys pressed: ${a.dtmf}` : "No phone-keypad tones detected."),
+      tile("Morse", a.morse ? "good" : "neutral", a.morse ? "found" : "none", a.morse ? `Decoded: ${a.morse}` : "No Morse code detected.")),
+    h("div", { class: "panel" }, h("h3", {}, "Spectrogram"),
+      h("p", { class: "muted" }, "Time runs left to right, pitch bottom to top. Text or pictures drawn here are a classic CTF hiding place. Click to open full size."),
+      a.spectrograms.map(spectro)),
+    h("div", { class: "panel" }, h("h3", {}, "Sample LSB extraction"),
+      h("p", { class: "muted" }, "The lowest bits of the audio samples, which are inaudible, packed into bytes."),
+      lsbTable(a.lsb)));
 }
 
 /* ================================================================== settings */

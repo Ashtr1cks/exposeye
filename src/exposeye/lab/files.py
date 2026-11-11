@@ -9,7 +9,6 @@ with automatic recovery of tampered dimensions, and LSB steganography for lossle
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import io
 import math
@@ -17,11 +16,12 @@ import re
 import struct
 import zipfile
 import zlib
-from collections import Counter
 from pathlib import PurePath
 
+import numpy as np
 from PIL import ExifTags, Image, UnidentifiedImageError
 
+from exposeye.lab import stego
 from exposeye.lab.flags import FlagHunter
 
 MAX_FILE = 50 * 1024 * 1024
@@ -99,45 +99,74 @@ def identify(data: bytes) -> dict | None:
     return None
 
 
-def entropy(chunk: bytes) -> float:
-    if not chunk:
+_ASCII = np.zeros(256, dtype=bool)
+_ASCII[0x20:0x7F] = True
+
+
+def _entropy_from_counts(counts: np.ndarray) -> float:
+    n = counts.sum()
+    if not n:
         return 0.0
-    n = len(chunk)
-    return -sum(c / n * math.log2(c / n) for c in Counter(chunk).values())
+    p = counts[counts > 0] / n
+    return float(-(p * np.log2(p)).sum())
 
 
-def _entropy_from_counts(counts, n: int) -> float:
-    return -sum(c / n * math.log2(c / n) for c in counts.values() if c) if n else 0.0
+def entropy(chunk: bytes) -> float:
+    return (
+        _entropy_from_counts(np.bincount(np.frombuffer(chunk, dtype=np.uint8), minlength=256))
+        if chunk
+        else 0.0
+    )
 
 
 def entropy_profile(data: bytes, points: int = 128) -> tuple[float, list[float]]:
-    """Overall entropy plus a per-block profile, counting every byte only once."""
+    """Overall entropy plus a per-block profile (vectorised: fast even on 50 MB files)."""
     if not data:
         return 0.0, []
-    block = max(256, math.ceil(len(data) / points))
-    total: Counter = Counter()
+    arr = np.frombuffer(data, dtype=np.uint8)
+    block = max(256, math.ceil(len(arr) / points))
+    total = np.zeros(256, dtype=np.int64)
     profile = []
-    for i in range(0, len(data), block):
-        counts = Counter(data[i : i + block])
-        total.update(counts)
-        profile.append(round(_entropy_from_counts(counts, min(block, len(data) - i)), 3))
-    return round(_entropy_from_counts(total, len(data)), 3), profile[:points]
+    for i in range(0, len(arr), block):
+        counts = np.bincount(arr[i : i + block], minlength=256)
+        total += counts
+        profile.append(round(_entropy_from_counts(counts), 3))
+    return round(_entropy_from_counts(total), 3), profile[:points]
+
+
+def _runs(mask: np.ndarray, min_len: int) -> tuple[np.ndarray, np.ndarray]:
+    edges = np.diff(np.concatenate(([0], mask.view(np.int8), [0])))
+    starts, ends = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
+    keep = ends - starts >= min_len
+    return starts[keep], ends[keep]
 
 
 def strings(data: bytes, min_len: int = 5, limit: int = 4000) -> list[dict]:
+    """Printable ASCII and UTF-16LE runs, found with array operations instead of a regex."""
+    arr = np.frombuffer(data, dtype=np.uint8)
     found = []
-    for m in re.finditer(rb"[\x20-\x7e]{%d,}" % min_len, data):
-        found.append({"offset": m.start(), "text": m.group().decode("ascii"), "encoding": "ascii"})
+    starts, ends = _runs(_ASCII[arr], min_len)
+    for s, e in zip(starts[:limit], ends[:limit], strict=True):
+        found.append({"offset": int(s), "text": data[s:e].decode("ascii"), "encoding": "ascii"})
+    for parity in (0, 1):
         if len(found) >= limit:
             break
-    if len(found) < limit:
-        for m in re.finditer(rb"(?:[\x20-\x7e]\x00){%d,}" % min_len, data):
+        pairs = arr[parity : parity + (len(arr) - parity) // 2 * 2].reshape(-1, 2)
+        if not len(pairs):
+            continue
+        starts, ends = _runs(_ASCII[pairs[:, 0]] & (pairs[:, 1] == 0), min_len)
+        for s, e in zip(starts, ends, strict=True):
+            off = parity + 2 * int(s)
             found.append(
-                {"offset": m.start(), "text": m.group().decode("utf-16-le"), "encoding": "utf-16"}
+                {
+                    "offset": off,
+                    "text": data[off : parity + 2 * int(e)].decode("utf-16-le"),
+                    "encoding": "utf-16",
+                }
             )
             if len(found) >= limit:
                 break
-    found.sort(key=lambda s: s["offset"])
+    found.sort(key=lambda x: x["offset"])
     return found
 
 
@@ -520,99 +549,6 @@ def binary_meta(data: bytes, kind: str | None) -> dict | None:
     return None
 
 
-# ---------------------------------------------------------------- LSB steganography
-
-_REVERSE_BITS = bytes(int(f"{i:08b}"[::-1], 2) for i in range(256))
-
-
-def lsb(data: bytes, hunter: FlagHunter, max_out: int = 4096) -> dict | None:
-    """Extract least-significant bits from lossless images in common orders; rank by readability."""
-    try:
-        img = Image.open(io.BytesIO(data))
-        if img.format not in ("PNG", "BMP", "GIF", "TIFF", "WEBP"):
-            return None
-        img.load()
-    except (UnidentifiedImageError, OSError, Image.DecompressionBombError, ValueError, SyntaxError):
-        return None
-    has_alpha = "A" in img.getbands()
-    img = img.convert("RGBA" if has_alpha else "RGB")
-    if img.width * img.height > 16_000_000:
-        return None
-    raw = img.tobytes()
-    nch = 4 if has_alpha else 3
-    combos = {"R": [0], "G": [1], "B": [2], "RGB": [0, 1, 2], "BGR": [2, 1, 0]}
-    if has_alpha:
-        combos.update({"A": [3], "RGBA": [0, 1, 2, 3]})
-    candidates = []
-    need_bits = max_out * 8
-    for name, chans in combos.items():
-        for bit in (0, 1):
-            bits = bytearray()
-            for px in range(0, len(raw), nch):
-                for c in chans:
-                    bits.append((raw[px + c] >> bit) & 1)
-                if len(bits) >= need_bits:
-                    break
-            out = bytes(
-                bits[i] << 7
-                | bits[i + 1] << 6
-                | bits[i + 2] << 5
-                | bits[i + 3] << 4
-                | bits[i + 4] << 3
-                | bits[i + 5] << 2
-                | bits[i + 6] << 1
-                | bits[i + 7]
-                for i in range(0, len(bits) - 7, 8)
-            )
-            # also a common variant: LSB-first packing
-            for order, payload in (("msb-first", out), ("lsb-first", out.translate(_REVERSE_BITS))):
-                head = payload[:512]
-                text = payload.decode("latin-1")
-                flags = hunter.scan(text)
-                printable = sum(32 <= b < 127 or b in (9, 10, 13) for b in head) / max(len(head), 1)
-                # length of the readable run at the start: a hidden message is usually followed by noise
-                prefix = next(
-                    (i for i, b in enumerate(head) if not (32 <= b < 127 or b in (9, 10, 13))),
-                    len(head),
-                )
-                magic = identify(payload)
-                candidates.append(
-                    {
-                        "channels": name,
-                        "bit": bit,
-                        "order": order,
-                        "printable": round(printable, 3),
-                        "text_prefix": prefix,
-                        "flags": flags,
-                        "magic": magic["description"] if magic else None,
-                        "preview": head[:200].decode("latin-1"),
-                        "score": (3 if flags else 0)
-                        + (1.5 if magic else 0)
-                        + printable
-                        + min(prefix, 64) / 32,
-                    }
-                )
-    candidates.sort(key=lambda c: -c["score"])
-    planes = []
-    rgb = img.convert("RGB")
-    thumb_scale = min(1.0, 360 / max(rgb.width, rgb.height))
-    for ci, cname in enumerate("RGB"):
-        band = rgb.getchannel(ci)
-        for bit in (0, 1):
-            plane = band.point(lambda v, b=bit: 255 if (v >> b) & 1 else 0)
-            if thumb_scale < 1:
-                plane = plane.resize(
-                    (max(1, int(rgb.width * thumb_scale)), max(1, int(rgb.height * thumb_scale))),
-                    Image.NEAREST,
-                )
-            buf = io.BytesIO()
-            plane.save(buf, "PNG")
-            planes.append(
-                {"channel": cname, "bit": bit, "png": base64.b64encode(buf.getvalue()).decode()}
-            )
-    return {"candidates": candidates[:8], "planes": planes}
-
-
 # ---------------------------------------------------------------- top level
 
 
@@ -665,7 +601,11 @@ def analyse(data: bytes, name: str, hunter: FlagHunter | None = None) -> dict:
             zip_src = (data[emb["offset"] :], f"embedded at offset {emb['offset']}")
     result["zip"] = zip_meta(*zip_src) if zip_src else None
     result["binary"] = binary_meta(data, kind)
-    result["lsb"] = lsb(data, hunter) if result["image"] else None
+    result["lsb"] = stego.image_stego(data, hunter) if result["image"] else None
+    result["audio"] = stego.audio_stego(data, hunter) if kind == "riff" else None
+    looks_like_text = not kind and strs and sum(len(s["text"]) for s in strs) > len(data) * 0.6
+    result["text_stego"] = stego.text_stego(data, hunter) if looks_like_text or kind is None else []
+    result["jpeg_tools"] = stego.jpeg_tools() if kind == "jpg" else None
 
     # Flag hunt across everything we extracted.
     sources: dict[str, str] = {}
@@ -690,10 +630,21 @@ def analyse(data: bytes, name: str, hunter: FlagHunter | None = None) -> dict:
             flags.setdefault(f["value"], {**f, "where": where})
     for cand in (result["lsb"] or {}).get("candidates", []):
         for f in cand["flags"]:
+            where = f"LSB {cand['channels']} bit {cand['bit']} ({cand['order']}, {cand['packing']})"
+            flags.setdefault(f["value"], {**f, "where": where})
+    for cand in (result["audio"] or {}).get("lsb", []):
+        for f in cand["flags"]:
             flags.setdefault(
-                f["value"],
-                {**f, "where": f"LSB {cand['channels']} bit {cand['bit']} ({cand['order']})"},
+                f["value"], {**f, "where": f"audio LSB, {cand['channels']} bit {cand['bit']}"}
             )
+    for item in result["text_stego"]:
+        for f in item["flags"]:
+            flags.setdefault(f["value"], {**f, "where": item["method"]})
+    if result["audio"]:
+        for key in ("dtmf", "morse"):
+            if result["audio"][key]:
+                for f in hunter.scan(result["audio"][key]):
+                    flags.setdefault(f["value"], {**f, "where": f"audio {key.upper()}"})
     confirmed = [f for f in flags.values() if f["confidence"] == "high"]
     result["flags"] = confirmed or list(flags.values())[:10]
     result["hints"] = hints(result)
@@ -738,10 +689,52 @@ def hints(r: dict) -> list[str]:
     if r["image"] and (r["image"]["exif"] or r["image"]["text"]):
         out.append("Check the metadata: comments, author and description fields often hold clues.")
     top = (r["lsb"] or {}).get("candidates") or []
-    if top and (top[0]["flags"] or top[0]["text_prefix"] >= 8 or top[0]["printable"] > 0.9):
+    if top and (
+        top[0]["flags"]
+        or top[0]["magic"]
+        or top[0]["text_prefix"] >= 8
+        or top[0]["printable"] > 0.9
+    ):
         c = top[0]
+        what = f"a hidden {c['magic']}" if c["magic"] and not c["flags"] else "readable text"
         out.append(
-            f"The least-significant bits ({c['channels']}, bit {c['bit']}) look like readable text: likely LSB steganography."
+            f"The least-significant bits ({c['channels']}, bit {c['bit']}, {c['order']}) contain {what}: LSB steganography. See the Steganography tab."
+        )
+    elif r["lsb"]:
+        out.append(
+            "No readable LSB message found automatically. Flick through the bit planes in the Steganography tab: hidden text or shapes are often visible there."
+        )
+    if r["type"]["type"] == "jpg":
+        tools = r.get("jpeg_tools") or {}
+        have = [k for k, v in tools.items() if v]
+        out.append(
+            "JPEGs hide data in the compressed image data (steghide, OutGuess, JSteg), so LSB doesn't apply. "
+            "Try `stegseek file.jpg rockyou.txt` to crack steghide passwords, or `steghide extract -sf file.jpg` with an empty password."
+            + (
+                f" Installed here: {', '.join(have)}."
+                if have
+                else " (None of these tools are installed on this PC.)"
+            )
+        )
+    a = r.get("audio")
+    if a:
+        out.append(
+            "Audio file: look at the spectrogram in the Audio tab. Messages and images are often drawn into it"
+            + (" (check the left-minus-right view too)." if len(a["spectrograms"]) > 1 else ".")
+        )
+        if a["dtmf"]:
+            out.append(f"Phone keypad (DTMF) tones decoded: {a['dtmf']}")
+        if a["morse"]:
+            out.append(f"Morse code decoded from the audio: {a['morse']}")
+    elif r["type"]["type"] in ("mp3", "ogg", "flac"):
+        out.append(
+            "Compressed audio: convert it to WAV (e.g. `ffmpeg -i in.mp3 out.wav`) and analyse that for spectrograms and LSB, or open it in Sonic Visualiser / Audacity."
+        )
+    for item in r.get("text_stego") or []:
+        out.append(
+            f"Hidden text found using {item['method']}."
+            if item["output"]
+            else f"{item['method'][0].upper()}{item['method'][1:]}."
         )
     if r["zip"] and r["zip"]["encrypted"]:
         out.append(

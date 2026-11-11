@@ -12,6 +12,7 @@ browser and queries the k-anonymity API directly, so passwords never reach this 
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import re
@@ -35,6 +36,7 @@ from exposeye import __version__
 from exposeye.emailcheck import check_email as default_email_check
 from exposeye.lab import decoder as lab_decoder
 from exposeye.lab import files as lab_files
+from exposeye.lab import stego as lab_stego
 from exposeye.lab.flags import DEFAULT_FORMATS, FlagHunter, compile_formats
 from exposeye.monitor import task as bg_task
 from exposeye.monitor.diff import diff
@@ -343,6 +345,25 @@ def create_app(
             chunk,
             media_type="application/octet-stream",
             headers={"Content-Disposition": f'attachment; filename="{out}"'},
+        )
+
+    @app.get("/api/lab/files/{fid}/plane")
+    def lab_plane(fid: str, channel: str = "R", bit: int = 0, mode: str = "bit"):
+        """One Stegsolve-style view (bit plane / channel / inverted / random colours) as a PNG."""
+        _name, data = upload(fid)
+        if not 0 <= bit <= 7 or mode not in ("bit", "channel", "inverted", "random"):
+            raise HTTPException(400, "Invalid bit or mode.")
+        img = lab_stego.open_image(data)
+        if img is None:
+            raise HTTPException(400, "Not an image this analyser can open.")
+        try:
+            view = lab_stego.render_plane(img, channel, bit, mode)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        buf = io.BytesIO()
+        view.save(buf, "PNG")
+        return Response(
+            buf.getvalue(), media_type="image/png", headers={"Cache-Control": "max-age=600"}
         )
 
     @app.get("/api/lab/files/{fid}/fixed-png")

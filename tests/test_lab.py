@@ -134,7 +134,7 @@ def test_png_with_lsb_metadata_and_appended_zip():
     found = {f["value"]: f["where"] for f in r["flags"]}
     assert "CTF{in_the_metadata}" in found
     assert "flag{lsb_hidden}" in found and found["flag{lsb_hidden}"].startswith("LSB R bit 0")
-    assert len(r["lsb"]["planes"]) == 6
+    assert len(r["lsb"]["planes"]) == 24  # 8 bit planes x R, G, B
     assert any("hidden after the end" in h for h in r["hints"])
 
 

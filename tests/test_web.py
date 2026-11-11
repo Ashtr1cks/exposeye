@@ -184,3 +184,23 @@ def test_lab_api(client):
 
     assert client.get("/api/lab/files/nope/extract").status_code == 404
     assert client.post("/api/lab/files?name=x", content=b"").status_code == 400
+
+
+def test_lab_plane_endpoint(client):
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGBA", (12, 8), (3, 2, 1, 255)).save(buf, "PNG")
+    fid = client.post("/api/lab/files?name=p.png", content=buf.getvalue()).json()["id"]
+    r = client.get(f"/api/lab/files/{fid}/plane", params={"channel": "R", "bit": 1, "mode": "bit"})
+    assert r.status_code == 200 and Image.open(io.BytesIO(r.content)).size == (12, 8)
+    assert (
+        client.get(
+            f"/api/lab/files/{fid}/plane", params={"channel": "A", "mode": "random"}
+        ).status_code
+        == 200
+    )
+    assert client.get(f"/api/lab/files/{fid}/plane", params={"bit": 9}).status_code == 400
+    assert client.get(f"/api/lab/files/{fid}/plane", params={"channel": "Z"}).status_code == 400

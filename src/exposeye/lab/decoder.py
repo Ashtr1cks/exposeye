@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import unquote_to_bytes
 
+from exposeye.lab import stego
 from exposeye.lab.flags import FlagHunter
 
 MAX_INPUT = 1_000_000
@@ -385,7 +386,25 @@ def d_compressed(data: bytes) -> Decoded:
     return []
 
 
+def d_zero_width(data: bytes) -> Decoded:
+    """Text hidden in invisible Unicode characters (zero-width space/joiner...)."""
+    try:
+        return stego.zero_width(data.decode("utf-8"))
+    except UnicodeDecodeError:
+        return []
+
+
+def d_whitespace(data: bytes) -> Decoded:
+    """Bits hidden as spaces/tabs at the ends of lines."""
+    try:
+        return stego.whitespace(data.decode("utf-8"))
+    except UnicodeDecodeError:
+        return []
+
+
 DECODERS: list[Callable[[bytes], Decoded]] = [
+    d_zero_width,
+    d_whitespace,
     d_compressed,
     d_base64,
     d_base32,
