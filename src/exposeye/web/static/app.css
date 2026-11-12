@@ -550,3 +550,10 @@ mark.flag-mark.possible { background: var(--medium-soft); color: var(--medium); 
 .decoder-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 2px 0 10px; }
 .sort-by { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .sort-by select { padding: 5px 8px; }
+
+/* RSA / cipher fields */
+.rsa-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.rsa-field { display: grid; gap: 4px; font-size: 13px; }
+.rsa-field > span { color: var(--muted); }
+.rsa-field textarea, .rsa-field input { width: 100%; }
+

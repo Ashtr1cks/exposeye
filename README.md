@@ -169,6 +169,15 @@ exposeye-lab hash 5f4dcc3b5aa765d61d8327deb882cf99 --wordlist rockyou.txt
 exposeye-lab jwt eyJhbGci...                   # decode + check a token
 ```
 
+**RSA toolkit:** recover the plaintext from the weak or small RSA that shows up in challenges —
+factor a small or close-prime modulus, small-exponent (e-th root) attack, Wiener's attack for a
+small `d`, common-modulus attack, or decrypt directly when you have `p`/`q`/`d`. It also reads
+`n` and `e` out of a PEM/DER public key. It won't break secure, properly-padded RSA — nothing can.
+
+**Cipher cracker:** breaks classical keyed ciphers without the key — Vigenère (key length by
+index of coincidence, then frequency analysis), repeating-key XOR (the Cryptopals attack), affine,
+and rail fence. Works best on a sentence or more of ciphertext.
+
 ![CTF Lab decoder](docs/app-lab-decoder.png)
 
 <details><summary>Screenshots: file analyser and steganography</summary>
@@ -180,11 +189,12 @@ exposeye-lab jwt eyJhbGci...                   # decode + check a token
 ![Spectrogram with a hidden message](docs/app-lab-audio.png)
 
 ![Network capture with plaintext credentials](docs/app-lab-network.png)
+
+![RSA toolkit recovering a message](docs/app-lab-rsa.png)
 </details>
 
 Reverse engineering and binary exploitation are better served by dedicated tools (Ghidra,
 pwntools). The analyser triages executables (format and architecture, plus strings) and says so.
-Planned next for the Lab: RSA and classical-cipher helpers.
 
 ## Association map
 

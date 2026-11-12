@@ -297,6 +297,8 @@ function drawHistory() {
   document.getElementById("fileLink").classList.toggle("active", location.hash === "#/lab/file");
   document.getElementById("hashLink").classList.toggle("active", location.hash === "#/lab/hash");
   document.getElementById("jwtLink").classList.toggle("active", location.hash === "#/lab/jwt");
+  document.getElementById("rsaLink").classList.toggle("active", location.hash === "#/lab/rsa");
+  document.getElementById("cipherLink").classList.toggle("active", location.hash === "#/lab/cipher");
 }
 
 async function refreshBadge() {
@@ -323,6 +325,8 @@ function route() {
   else if (view === "lab" && id === "file") showFileLab();
   else if (view === "lab" && id === "hash") showHashes();
   else if (view === "lab" && id === "jwt") showJwt();
+  else if (view === "lab" && id === "rsa") showRsa();
+  else if (view === "lab" && id === "cipher") showCiphers();
   else if (view === "settings") showSettings();
   else showNew();
   drawHistory();
@@ -2691,6 +2695,162 @@ function fileNetwork(r) {
       h("td", { class: "mono" }, highlightFlags(x.path, r.flags)), h("td", { class: "mono muted" }, `${x.src} → ${x.dst}`))),
     "URLs and paths often carry tokens or flags."));
   return h("div", {}, parts);
+}
+
+/* ---- RSA ---- */
+
+async function showRsa() {
+  const s = await labSettings();
+  const field = (label, ph, big) => {
+    const el = big
+      ? h("textarea", { class: "lab-input mono", rows: "2", spellcheck: "false", placeholder: ph, "aria-label": label })
+      : h("input", { type: "text", class: "domain-input mono", spellcheck: "false", placeholder: ph, "aria-label": label });
+    return { el, row: h("label", { class: "rsa-field" }, h("span", {}, label), el) };
+  };
+  const n = field("n (modulus)", "decimal or 0x hex", true);
+  const e = field("e (exponent)", "65537");
+  const c = field("c (ciphertext)", "decimal or 0x hex", true);
+  const p = field("p", "prime factor (optional)");
+  const q = field("q", "prime factor (optional)");
+  const d = field("d", "private exponent (optional)");
+  const pubkey = h("textarea", { class: "lab-input mono", rows: "4", spellcheck: "false",
+    placeholder: "-----BEGIN PUBLIC KEY----- … (optional: fills n and e)" });
+  const e2 = field("e2", "second exponent");
+  const c2 = field("c2", "second ciphertext");
+  const out = h("div", {});
+  const err = h("div", { class: "form-error", role: "alert" });
+  const run = h("button", { class: "btn btn-primary", type: "submit" }, icon("play"), "Solve");
+
+  async function go() {
+    err.textContent = "";
+    out.replaceChildren(h("div", { class: "empty" }, h("span", { class: "spinner", style: "display:inline-block" }), h("div", {}, "Working… (factoring is time-limited)")));
+    run.disabled = true;
+    try {
+      const body = { n: n.el.value, e: e.el.value, c: c.el.value, p: p.el.value, q: q.el.value,
+        d: d.el.value, pubkey: pubkey.value, e2: e2.el.value, c2: c2.el.value };
+      const r = await api.post("/api/lab/rsa", body);
+      out.replaceChildren(rsaReport(r));
+    } catch (ex) { out.replaceChildren(); err.textContent = ex.message; }
+    run.disabled = false;
+  }
+
+  function rsaReport(r) {
+    const rec = r.recovered;
+    const parts = [];
+    if (rec) {
+      parts.push(h("div", { class: "flag-banner" + (r.flags.length ? "" : " possible"), style: r.flags.length ? "" : "background:var(--ok-soft);border-color:var(--ok)" },
+        h("div", { class: "flag-head" }, icon("key"), `Recovered via ${r.method}`),
+        rec.text
+          ? h("div", { class: "flag-row" }, h("span", { class: "flag-value" }, rec.text),
+              h("button", { class: "btn btn-sm", type: "button", onclick: () => copyText(rec.text) }, icon("copy"), "Copy"))
+          : h("div", { class: "muted" }, "Message isn't printable text; see the integer/hex below."),
+        r.flags.length ? h("div", {}, r.flags.map((f) => h("span", { class: "tag good" }, f.value))) : null));
+    } else {
+      parts.push(h("div", { class: "notice" + (r.method === "none" ? " danger" : "") }, r.detail));
+    }
+    const kv = [];
+    if (r.method) kv.push(["Method", r.method]);
+    if (r.detail && rec) kv.push(["How", r.detail]);
+    if (r.pubkey) kv.push(["Public key", `${r.pubkey.bits}-bit, e=${r.pubkey.e}`]);
+    if (r.p) kv.push(["p", r.p]);
+    if (r.q) kv.push(["q", r.q]);
+    if (r.d) kv.push(["d", r.d]);
+    if (rec) { kv.push(["message (int)", rec.int]); kv.push(["message (hex)", rec.bytes_hex]); }
+    parts.push(h("div", { class: "panel" }, h("dl", { class: "kv" },
+      kv.map(([k, v]) => [h("dt", {}, k), h("dd", { class: "mono", style: "word-break:break-all" }, String(v),
+        " ", h("button", { class: "btn btn-sm btn-ghost", type: "button", onclick: () => copyText(String(v)) }, icon("copy")))]))));
+    return h("div", {}, parts);
+  }
+
+  const form = h("form", { class: "panel", onsubmit: (ev) => { ev.preventDefault(); go(); } },
+    h("div", { class: "rsa-grid" }, n.row, e.row, c.row, p.row, q.row, d.row),
+    h("details", { class: "options", style: "margin:12px 0" }, h("summary", {}, icon("sliders"), "Public key / common modulus"),
+      h("div", { class: "options-body" },
+        h("div", { class: "toggle-text" }, h("strong", {}, "Public key"), h("span", {}, "Paste a PEM/DER key to fill n and e automatically.")),
+        pubkey,
+        h("div", { class: "toggle-text", style: "margin-top:10px" }, h("strong", {}, "Common modulus"), h("span", {}, "Same n, two coprime exponents, two ciphertexts: fill e, c and e2, c2.")),
+        h("div", { class: "rsa-grid" }, e2.row, c2.row))),
+    h("div", { class: "lab-controls" }, run,
+      h("button", { class: "btn btn-ghost", type: "button", onclick: () => {
+        n.el.value = "9999800020000063"; e.el.value = "65537"; c.el.value = "42"; go();
+      } }, "Try an example")),
+    h("div", { class: "muted lab-tip" }, "Factoring, small-exponent, Wiener and common-modulus attacks - for challenge keys or your own test keys. Won't break secure RSA. Runs on this PC."),
+    err);
+
+  render(h("section", {},
+    h("div", { class: "hero" }, h("h1", {}, "RSA toolkit"),
+      h("p", {}, "Recover the plaintext from weak or small RSA. Give n, e, c (and p/q/d if you have them), or a public key.")),
+    formatsLine(s), form, out));
+}
+
+/* ---- Ciphers ---- */
+
+async function showCiphers() {
+  const s = await labSettings();
+  const input = h("textarea", { class: "lab-input mono", rows: "4", spellcheck: "false", "aria-label": "Ciphertext",
+    placeholder: "Paste ciphertext. Auto tries Vigenère, affine and rail-fence; pick a mode for XOR or to supply a Vigenère key." });
+  input.value = store.get("ds.cipher.input", "");
+  const mode = h("select", { "aria-label": "Cipher" },
+    h("option", { value: "auto" }, "Auto (try all)"), h("option", { value: "vigenere" }, "Vigenère"),
+    h("option", { value: "xor" }, "Repeating-key XOR"), h("option", { value: "affine" }, "Affine"),
+    h("option", { value: "railfence" }, "Rail fence"));
+  mode.value = store.get("ds.cipher.mode", "auto");
+  const keyInput = h("input", { type: "text", class: "domain-input", placeholder: "Vigenère key (leave blank to crack it)", "aria-label": "Vigenère key" });
+  const keyWrap = h("label", { class: "toggle-text", style: "flex:1;min-width:200px" }, keyInput);
+  const hexBox = h("input", { type: "checkbox" });
+  const hexWrap = h("label", { class: "toggle inline" }, hexBox, h("span", { class: "switch" }), h("span", {}, "Input is hex"));
+  const out = h("div", { class: "lab-results" });
+  const err = h("div", { class: "form-error", role: "alert" });
+  const run = h("button", { class: "btn btn-primary", type: "submit" }, icon("play"), "Crack");
+
+  function syncMode() {
+    keyWrap.style.display = mode.value === "vigenere" ? "" : "none";
+    hexWrap.style.display = mode.value === "xor" || mode.value === "auto" ? "" : "none";
+  }
+  mode.addEventListener("change", syncMode);
+
+  async function go() {
+    if (!input.value.trim()) { err.textContent = "Paste some ciphertext."; return; }
+    err.textContent = "";
+    store.set("ds.cipher.input", input.value.slice(0, 20000));
+    store.set("ds.cipher.mode", mode.value);
+    run.disabled = true;
+    out.replaceChildren(h("div", { class: "empty" }, h("span", { class: "spinner", style: "display:inline-block" })));
+    try {
+      const r = await api.post("/api/lab/cipher", { input: input.value, mode: mode.value, key: keyInput.value || null, is_hex: hexBox.checked });
+      out.replaceChildren(...(r.results.length ? r.results.map(cipherCard)
+        : [h("div", { class: "empty" }, "No readable result. Try a different mode, or it may not be one of these ciphers.")]));
+    } catch (ex) { out.replaceChildren(); err.textContent = ex.message; }
+    run.disabled = false;
+  }
+
+  function cipherCard(res) {
+    const hasFlag = res.flags.length > 0;
+    return h("article", { class: `lab-card ${hasFlag ? "has-flag" : ""}` },
+      h("div", { class: "lab-card-head" },
+        h("div", { class: "chain" }, h("span", { class: "chain-step" }, res.cipher),
+          res.key ? [h("span", { class: "chain-arrow" }, "key"), h("span", { class: "chain-step start mono" }, res.key)] : null),
+        h("span", { class: "score" }, `${Math.round(Math.min(res.score, 1) * 100)}%`)),
+      h("pre", { class: "lab-output" }, highlightFlags(res.text, res.flags)),
+      h("div", { class: "lab-actions" },
+        h("button", { class: "btn btn-sm", type: "button", onclick: () => copyText(res.text) }, icon("copy"), "Copy"),
+        h("button", { class: "btn btn-sm", type: "button", onclick: () => sendToDecoder(res.text) }, "Send to decoder")));
+  }
+
+  input.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); go(); } });
+  const form = h("form", { class: "panel", onsubmit: (ev) => { ev.preventDefault(); go(); } },
+    input,
+    h("div", { class: "lab-controls" }, run, mode, keyWrap, hexWrap,
+      h("button", { class: "btn btn-ghost", type: "button", onclick: () => { input.value = "oi jfpw llgji mjyvyw mg fg jiex ixzhxfx vyem spn dig svg tvxsxgu ijmen rrw llck xawc cii xfhqniw tc vyibj gtvemgv yzxa uitkebf yprpbwrcspx jmiyxl sqqek mziuv ekw pkwi tfh nzfxjxa"; mode.value = "auto"; syncMode(); go(); } }, "Try an example")),
+    h("div", { class: "muted lab-tip" }, "Works out the key from the ciphertext by frequency analysis. Everything runs on this PC."),
+    err);
+
+  render(h("section", {},
+    h("div", { class: "hero" }, h("h1", {}, "Cipher cracker"),
+      h("p", {}, "Break classical keyed ciphers — Vigenère, repeating-key XOR, affine and rail fence — without the key.")),
+    formatsLine(s), form, out));
+  syncMode();
+  if (input.value.trim()) go(); else input.focus();
 }
 
 /* ================================================================== settings */

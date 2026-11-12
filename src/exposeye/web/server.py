@@ -174,6 +174,25 @@ class JwtRequest(BaseModel):
     resign_secret: str | None = Field(None, max_length=1000)
 
 
+class RsaRequest(BaseModel):
+    n: str | None = Field(None, max_length=5000)
+    e: str | None = Field(None, max_length=5000)
+    c: str | None = Field(None, max_length=5000)
+    p: str | None = Field(None, max_length=5000)
+    q: str | None = Field(None, max_length=5000)
+    d: str | None = Field(None, max_length=5000)
+    pubkey: str | None = Field(None, max_length=20_000)
+    e2: str | None = Field(None, max_length=5000)
+    c2: str | None = Field(None, max_length=5000)
+
+
+class CipherRequest(BaseModel):
+    input: str = Field(..., max_length=200_000)
+    mode: str = "auto"
+    key: str | None = Field(None, max_length=1000)
+    is_hex: bool = False
+
+
 class WatchAdd(BaseModel):
     target: str = Field(..., max_length=500)
     interval: str = "daily"
@@ -394,6 +413,127 @@ def create_app(
             if req.resign_secret:
                 info["resigned"] = jwt_tools.resign(req.token, req.resign_secret)
         return info
+
+    def _bigint(val: str | None):
+        if val is None or not val.strip():
+            return None
+        s = val.strip().replace(" ", "").replace("_", "")
+        try:
+            return int(s, 16) if s.lower().startswith("0x") else int(s)
+        except ValueError as exc:
+            raise HTTPException(400, f"Not a valid integer: {val[:40]}") from exc
+
+    @app.post("/api/lab/rsa")
+    def lab_rsa(req: RsaRequest):
+        from exposeye.lab import rsa as lab_rsa
+
+        n, e = _bigint(req.n), _bigint(req.e)
+        c, p, q, d = _bigint(req.c), _bigint(req.p), _bigint(req.q), _bigint(req.d)
+        parsed = None
+        if req.pubkey and req.pubkey.strip():
+            parsed = lab_rsa.parse_pubkey(req.pubkey)
+            if not parsed:
+                raise HTTPException(400, "Couldn't read an RSA public key from that.")
+            n, e = parsed["n"], parsed["e"]
+        e2, c2 = _bigint(req.e2), _bigint(req.c2)
+        if e2 is not None and c2 is not None:  # common-modulus mode
+            if n is None or e is None or c is None:
+                raise HTTPException(400, "Common modulus needs n, e, c and a second e2, c2.")
+            res = lab_rsa.common_modulus(n, e, c, e2, c2)
+        else:
+            if n is None and (p is None or q is None):
+                raise HTTPException(400, "Provide n (or a public key), or both p and q.")
+            res = lab_rsa.solve(n, e, c, p, q, d)
+
+        def big(x):
+            return str(x) if x is not None else None
+
+        rec = res.recovered
+        return {
+            "method": res.method,
+            "detail": res.detail,
+            "pubkey": {"n": big(parsed["n"]), "e": big(parsed["e"]), "bits": parsed["bits"]}
+            if parsed
+            else None,
+            "p": big(res.p),
+            "q": big(res.q),
+            "d": big(res.d),
+            "recovered": {
+                "int": big(rec["int"]),
+                "bytes_hex": rec["bytes_hex"],
+                "text": rec["text"],
+                "preview": rec["preview"],
+            }
+            if rec
+            else None,
+            "flags": hunter().scan(rec["preview"]) if rec else [],
+        }
+
+    @app.post("/api/lab/cipher")
+    def lab_cipher(req: CipherRequest):
+        from exposeye.lab import classical
+
+        hun = hunter()
+        text = req.input
+        out = []
+
+        def add(cipher, cracked, kind="text"):
+            if cracked is None:
+                return
+            body = cracked["text"] if isinstance(cracked, dict) else cracked.text
+            key = cracked["key_text"] if isinstance(cracked, dict) else cracked.key
+            score = cracked["score"] if isinstance(cracked, dict) else cracked.score
+            detail = cracked.get("detail", "") if isinstance(cracked, dict) else cracked.detail
+            out.append(
+                {
+                    "cipher": cipher,
+                    "text": body,
+                    "key": key,
+                    "score": score,
+                    "detail": detail,
+                    "flags": hun.scan(body),
+                }
+            )
+
+        def xor_bytes():
+            if req.is_hex:
+                try:
+                    return bytes.fromhex("".join(text.split()))
+                except ValueError as exc:
+                    raise HTTPException(400, "Input isn't valid hex.") from exc
+            return text.encode("latin-1", "replace")
+
+        if req.mode == "vigenere":
+            if req.key:
+                plain = classical.vigenere_decrypt(text, req.key)
+                add(
+                    "Vigenère (decrypt)",
+                    classical.Cracked(
+                        plain,
+                        req.key,
+                        "Decrypted with your key.",
+                        round(classical.english_score(plain), 3),
+                    ),
+                )
+            else:
+                add("Vigenère", classical.vigenere_crack(text))
+        elif req.mode == "xor":
+            add("Repeating-key XOR", classical.xor_repeating_crack(xor_bytes()))
+        elif req.mode == "affine":
+            add("Affine", classical.affine_crack(text))
+        elif req.mode == "railfence":
+            for cand in classical.railfence_crack(text):
+                add(f"Rail fence ({cand.key} rails)", cand)
+        else:  # auto: try the keyed text ciphers and surface the best
+            add("Vigenère", classical.vigenere_crack(text))
+            add("Affine", classical.affine_crack(text))
+            rf = classical.railfence_crack(text)
+            if rf:
+                add(f"Rail fence ({rf[0].key} rails)", rf[0])
+            if req.is_hex or not any(ch.isalpha() for ch in text[:50]):
+                add("Repeating-key XOR", classical.xor_repeating_crack(xor_bytes()))
+            out.sort(key=lambda r: -r["score"])
+        return {"results": out}
 
     @app.post("/api/lab/files")
     async def lab_analyse(request: Request, name: str = "upload"):
