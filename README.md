@@ -200,11 +200,16 @@ to via CNAME. It surfaces patterns a table hides:
   open port, takeover). Bigger nodes have more open ports, and amber rings mark sensitive-sounding
   names.
 
-**Grouped by provider (default):** each hosting provider (Amazon AWS, Cloudflare, Microsoft
-Azure…) gets its own region, laid out separately and packed with gaps between them. A region's
-border shows the worst risk inside it. Outside services and names that no longer resolve get
-their own regions too, and the domain links once to each region instead of to every host.
-**Free-form** switches to a force-directed view.
+Three layouts are available:
+
+- **Radial (default):** the domain sits at the centre and every node is placed on a ring by its
+  distance from it, so subdomains orbit close in while their IPs and hosting networks drift
+  outward. Children stay in an angular wedge under their parent, giving a sunburst that reads as
+  gravity pulling everything toward the domain.
+- **Grouped by provider:** each hosting provider (Amazon AWS, Cloudflare, Microsoft Azure…) gets
+  its own region, laid out separately and packed with gaps between them, its border coloured by
+  the worst risk inside. Outside services and names that no longer resolve get their own regions.
+- **Free-form:** a force-directed view.
 
 **Semantic zoom:** as you zoom in, dots grow more slowly than the space between them, so the map
 spreads out instead of just getting bigger. Text stays a constant, readable size, and labels
