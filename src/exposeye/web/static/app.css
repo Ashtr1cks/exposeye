@@ -557,3 +557,6 @@ mark.flag-mark.possible { background: var(--medium-soft); color: var(--medium); 
 .rsa-field > span { color: var(--muted); }
 .rsa-field textarea, .rsa-field input { width: 100%; }
 
+
+.side-link.kofi:hover { color: #ff5e5b; }
+.side-link.kofi:hover svg { color: #ff5e5b; }

@@ -3,6 +3,7 @@
 [![CI](https://github.com/Ashtr1cks/exposeye/actions/workflows/ci.yml/badge.svg)](https://github.com/Ashtr1cks/exposeye/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
+[![Ko-fi](https://img.shields.io/badge/support-Ko--fi-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/ashtricks)
 
 **A local, all-in-one cybersecurity toolkit: OSINT recon, monitoring and a CTF lab, as a desktop app and a CLI.**
 
@@ -435,6 +436,11 @@ This tool is for **education, defensive security, and authorised assessments**. 
 uses only public data. Active mode sends ordinary HTTP(S) requests, which is roughly what a
 browser does, but you should still only scan domains you own or have written permission to
 test. You are responsible for how you use it.
+
+## Support
+
+exposeye is free and open source. If it's useful to you, you can support its development on
+Ko-fi: **[ko-fi.com/ashtricks](https://ko-fi.com/ashtricks)**. Thank you!
 
 ## License
 

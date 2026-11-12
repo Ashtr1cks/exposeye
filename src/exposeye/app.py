@@ -66,7 +66,12 @@ def main(argv: list[str] | None = None) -> int:
             except (AttributeError, KeyError, TypeError):
                 pass
             webview.create_window("exposeye", url, width=1320, height=860, min_size=(960, 640))
-            webview.start()  # blocks until the window is closed
+            icon = Path(__file__).parent / "web" / "static" / "logo.ico"
+            start_kw = {"icon": str(icon)} if icon.exists() else {}
+            try:
+                webview.start(**start_kw)  # blocks until the window is closed
+            except TypeError:  # older pywebview without an icon parameter
+                webview.start()
             server.should_exit = True
             thread.join(timeout=5)
             return 0
