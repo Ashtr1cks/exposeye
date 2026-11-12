@@ -545,3 +545,8 @@ mark.flag-mark.possible { background: var(--medium-soft); color: var(--medium); 
 .spectro-y { display: flex; flex-direction: column; justify-content: space-between; font-size: 11px; color: var(--muted); text-align: right; font-family: var(--mono); }
 .spectro-x { display: flex; justify-content: space-between; margin-left: 64px; font-size: 11px; color: var(--muted); font-family: var(--mono); }
 @media (max-width: 860px) { .plane-grid { grid-template-columns: 26px repeat(4, minmax(0, 1fr)); } .plane-row-label { grid-row: span 2; } }
+
+/* decoder sort control */
+.decoder-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 2px 0 10px; }
+.sort-by { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.sort-by select { padding: 5px 8px; }

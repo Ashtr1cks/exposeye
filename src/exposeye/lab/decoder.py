@@ -68,6 +68,21 @@ COMMON_WORDS = re.compile(
 )
 
 
+_TEXTY = frozenset(
+    b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 \t\n\r.,:;/\"'(){}[]-_=+@"
+)
+
+
+def text_quality(data: bytes) -> float:
+    """Flag-free "does this look like real text/data?" measure (0..1). Letters, digits, spaces and
+    common text punctuation score high; random symbol soup (e.g. a wrong ROT47 branch) scores low.
+    Used only to re-sort results under "Most readable", so JSON and other non-English output surfaces."""
+    if not data:
+        return 0.0
+    sample = data[:2048]
+    return sum(b in _TEXTY for b in sample) / len(sample)
+
+
 def printable_ratio(data: bytes) -> float:
     if not data:
         return 0.0
@@ -512,6 +527,7 @@ def decode(
             {
                 "chain": list(n.chain),
                 "score": round(n.score, 3),
+                "quality": round(text_quality(n.data), 3),
                 "printable": printable,
                 "text": n.data.decode("utf-8", "replace")[:5000] if printable else None,
                 "hex": n.data[:256].hex(" ") if not printable else None,

@@ -2025,9 +2025,24 @@ async function showDecoder() {
   depth.value = String(store.get("ds.lab.depth", 4));
   const caesar = h("input", { type: "checkbox", checked: store.get("ds.lab.caesar", true) });
   const xor = h("input", { type: "checkbox", checked: store.get("ds.lab.xor", true) });
-  const out = h("div", { class: "lab-results" });
+  const out = h("div", {});
+  const listBox = h("div", { class: "lab-results" });
   const err = h("div", { class: "form-error", role: "alert" });
   const run = h("button", { class: "btn btn-primary", type: "submit" }, icon("play"), "Decode");
+  const sortSel = h("select", { "aria-label": "Sort results" },
+    h("option", { value: "best" }, "Best match"),
+    h("option", { value: "layers" }, "Fewest layers"),
+    h("option", { value: "readable" }, "Most readable"));
+  sortSel.value = store.get("ds.lab.sort", "best");
+  let lastResults = null;
+
+  // The decoder's "best" order already demotes weak-chain look-alikes, so for "best" keep it as-is.
+  const confirmed = (res) => res.flags.some((f) => f.confidence === "high");
+  const SORTERS = {
+    best: null,
+    layers: (a, b) => a.chain.length - b.chain.length || b.score - a.score,
+    readable: (a, b) => (b.quality || 0) - (a.quality || 0) || b.score - a.score,
+  };
 
   async function decodeNow() {
     const text = input.value;
@@ -2043,30 +2058,42 @@ async function showDecoder() {
     try {
       const r = await api.post("/api/lab/decode", { input: text, depth: Number(depth.value), caesar: caesar.checked, xor: xor.checked });
       const ms = Math.round(performance.now() - t0);
+      lastResults = r.results;
       out.replaceChildren(
-        flagBanner(r.flags) || h("div", { class: "notice" }, "No flag found yet. The most readable results are below; you can decode any of them further."),
-        h("div", { class: "muted lab-meta" }, `${plural(r.explored, "candidate")} tried in ${ms} ms`),
-        ...(r.results.length ? resultList(r.results)
-          : [h("div", { class: "empty" }, "Nothing decoded. It may be a cipher that needs a key (Vigenère, AES…) or not encoded at all.")]));
+        flagBanner(r.flags) || h("div", { class: "notice" }, "No flag found yet. The results are below; re-sort them or decode any one further."),
+        h("div", { class: "decoder-meta" },
+          h("span", { class: "muted lab-meta" }, `${plural(r.explored, "candidate")} tried in ${ms} ms`),
+          r.results.length ? h("label", { class: "sort-by muted" }, "Sort: ", sortSel) : null),
+        listBox);
+      renderList();
     } catch (ex) { out.replaceChildren(); err.textContent = ex.message; }
     run.disabled = false;
   }
 
-  // Show what matters first: every result containing a flag plus the next few best; the long tail
-  // of brute-force guesses stays behind a button.
-  function resultList(results) {
-    const confirmed = (res) => res.flags.some((f) => f.confidence === "high");
-    const anyConfirmed = results.some(confirmed);
-    const withFlags = results.filter((res) => (anyConfirmed ? confirmed(res) : res.flags.length)).length;
-    const first = withFlags ? withFlags + 3 : 8;
-    const cards = results.slice(0, first).map(resultCard);
-    if (results.length > first) {
-      const more = h("button", { class: "btn btn-ghost show-more", type: "button" }, `Show ${results.length - first} more results`);
-      more.addEventListener("click", () => more.replaceWith(...results.slice(first).map(resultCard)));
+  // Flags stay pinned on top; the chosen sort re-orders the rest (useful for non-English output).
+  function renderList() {
+    if (!lastResults) return;
+    if (!lastResults.length) {
+      listBox.replaceChildren(h("div", { class: "empty" }, "Nothing decoded. It may be a cipher that needs a key (Vigenère, AES…) or not encoded at all."));
+      return;
+    }
+    // Pin only confirmed flags; "possible" look-alikes (often false positives) sort with the rest,
+    // so the chosen sort actually controls what surfaces.
+    const flagged = lastResults.filter(confirmed);
+    const rest = lastResults.filter((res) => !confirmed(res));
+    const sorter = SORTERS[sortSel.value];
+    if (sorter) rest.sort(sorter);
+    const ordered = [...flagged, ...rest];
+    const first = flagged.length + 6;
+    const cards = ordered.slice(0, first).map(resultCard);
+    if (ordered.length > first) {
+      const more = h("button", { class: "btn btn-ghost show-more", type: "button" }, `Show ${ordered.length - first} more results`);
+      more.addEventListener("click", () => more.replaceWith(...ordered.slice(first).map(resultCard)));
       cards.push(more);
     }
-    return cards;
+    listBox.replaceChildren(...cards);
   }
+  sortSel.addEventListener("change", () => { store.set("ds.lab.sort", sortSel.value); renderList(); });
 
   function resultCard(res) {
     const chain = h("div", { class: "chain" }, h("span", { class: "chain-step start" }, "input"),
