@@ -28,51 +28,6 @@ def _free_port(preferred: int) -> int:
             return s.getsockname()[1]
 
 
-def _force_window_icon(window, icon_path: Path) -> None:
-    """Force the window's small and big icons onto the native handle once it is shown.
-
-    pywebview sets the WinForms Form.Icon, which fixes the title-bar icon, but the
-    Windows taskbar button reads the window's "big" icon, which can stay the default
-    Python/app icon. WM_SETICON sets both directly so the taskbar shows our icon too.
-    """
-    import ctypes
-    from ctypes import wintypes
-
-    def _apply(*_args) -> None:
-        try:
-            user32 = ctypes.windll.user32
-            user32.LoadImageW.restype = wintypes.HANDLE
-            user32.LoadImageW.argtypes = [
-                wintypes.HINSTANCE,
-                wintypes.LPCWSTR,
-                wintypes.UINT,
-                ctypes.c_int,
-                ctypes.c_int,
-                wintypes.UINT,
-            ]
-            user32.SendMessageW.restype = wintypes.LPARAM
-            user32.SendMessageW.argtypes = [
-                wintypes.HWND,
-                wintypes.UINT,
-                wintypes.WPARAM,
-                wintypes.LPARAM,
-            ]
-            image_icon, load_from_file = 1, 0x0010
-            wm_seticon, icon_small, icon_big = 0x0080, 0, 1
-            path = str(icon_path)
-            hwnd = window.native.Handle.ToInt64()
-            big = user32.LoadImageW(None, path, image_icon, 32, 32, load_from_file)
-            small = user32.LoadImageW(None, path, image_icon, 16, 16, load_from_file)
-            if big:
-                user32.SendMessageW(hwnd, wm_seticon, icon_big, big)
-            if small:
-                user32.SendMessageW(hwnd, wm_seticon, icon_small, small)
-        except Exception:  # noqa: BLE001 - cosmetic only
-            pass
-
-    window.events.shown += _apply
-
-
 def main(argv: list[str] | None = None) -> int:
     # Launched as a GUI app (pythonw, no console) there is no stdout/stderr, so print()
     # and library logging would crash. Give them a sink before anything writes.
@@ -119,23 +74,8 @@ def main(argv: list[str] | None = None) -> int:
                 webview.settings["ALLOW_DOWNLOADS"] = True
             except (AttributeError, KeyError, TypeError):
                 pass
-            # Detach the taskbar button from the pythonw.exe process so it shows our own icon
-            # (and groups as "exposeye") instead of the generic Python icon.
-            if sys.platform == "win32":
-                try:
-                    import ctypes
-
-                    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                        "exposeye.desktop.app"
-                    )
-                except Exception:  # noqa: BLE001 - cosmetic only
-                    pass
-            win = webview.create_window(
-                "exposeye", url, width=1320, height=860, min_size=(960, 640)
-            )
+            webview.create_window("exposeye", url, width=1320, height=860, min_size=(960, 640))
             icon = Path(__file__).parent / "web" / "static" / "logo.ico"
-            if sys.platform == "win32" and icon.exists():
-                _force_window_icon(win, icon)  # taskbar button, not just the title bar
             start_kw = {"icon": str(icon)} if icon.exists() else {}
             try:
                 webview.start(**start_kw)  # blocks until the window is closed
