@@ -65,6 +65,17 @@ def main(argv: list[str] | None = None) -> int:
                 webview.settings["ALLOW_DOWNLOADS"] = True
             except (AttributeError, KeyError, TypeError):
                 pass
+            # Detach the taskbar button from the pythonw.exe process so it shows our own icon
+            # (and groups as "exposeye") instead of the generic Python icon.
+            if sys.platform == "win32":
+                try:
+                    import ctypes
+
+                    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                        "exposeye.desktop.app"
+                    )
+                except Exception:  # noqa: BLE001 - cosmetic only
+                    pass
             webview.create_window("exposeye", url, width=1320, height=860, min_size=(960, 640))
             icon = Path(__file__).parent / "web" / "static" / "logo.ico"
             start_kw = {"icon": str(icon)} if icon.exists() else {}
