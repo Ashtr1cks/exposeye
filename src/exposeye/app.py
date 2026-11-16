@@ -29,6 +29,15 @@ def _free_port(preferred: int) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Launched as a GUI app (pythonw, no console) there is no stdout/stderr, so print()
+    # and library logging would crash. Give them a sink before anything writes.
+    if sys.stdout is None or sys.stderr is None:
+        import os
+
+        sink = open(os.devnull, "w")  # noqa: SIM115 - lives for the whole process
+        sys.stdout = sys.stdout or sink
+        sys.stderr = sys.stderr or sink
+
     p = argparse.ArgumentParser(prog="exposeye-app", description="exposeye desktop UI")
     p.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"port (default {DEFAULT_PORT})")
     p.add_argument("--browser", action="store_true", help="open in your browser, not a window")

@@ -39,10 +39,14 @@ dev = ["pytest>=8.0", "ruff>=0.5", "httpx>=0.27"]
 
 [project.scripts]
 exposeye = "exposeye.cli:main"
-exposeye-app = "exposeye.app:main"
 exposeye-email = "exposeye.email_cli:main"
 exposeye-watch = "exposeye.watch_cli:main"
 exposeye-lab = "exposeye.lab_cli:main"
+
+[project.gui-scripts]
+# A GUI (pythonw) launcher so double-clicking opens the app with no console window
+# and no stray "Python" taskbar button next to it.
+exposeye-app = "exposeye.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/exposeye"]

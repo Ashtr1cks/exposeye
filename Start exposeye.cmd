@@ -7,5 +7,5 @@ if not exist ".venv\Scripts\python.exe" (
     ".venv\Scripts\python.exe" -m pip install --quiet --upgrade pip
     ".venv\Scripts\python.exe" -m pip install --quiet -e ".[desktop]" || (pause & exit /b 1)
 )
-".venv\Scripts\exposeye-app.exe" %*
-if errorlevel 1 pause
+rem Launch detached so this setup window closes and only the app window remains.
+start "" ".venv\Scripts\exposeye-app.exe" %*
